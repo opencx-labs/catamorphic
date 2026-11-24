@@ -2738,6 +2738,46 @@ function ChatDockContent({
     (!dockEngaged || nativeBackdrop) &&
     !dropActive;
   lurkingRef.current = lurking;
+  // An open question fits the card it is in. Half a tall window is more
+  // than a floating card holds, so its body's most is what the timeline and
+  // the requests share, less everything else in the requests: the panel's
+  // header and Submit and the composer below always show, and only the
+  // options scroll.
+  const requestsRef = useRef<HTMLDivElement>(null);
+  const requestsContentRef = useRef<HTMLDivElement>(null);
+  const asking = shownQuestions.length > 0;
+  useLayoutEffect(() => {
+    const requests = requestsRef.current;
+    const content = requestsContentRef.current;
+    const section = sectionRef.current;
+    if (!asking || !requests || !content || !section) return;
+    const timeline = section.querySelector<HTMLElement>(".cat-timeline");
+    let applied: number | undefined;
+    const fit = () => {
+      const body = requests.querySelector<HTMLElement>(
+        "[data-question-body]:not([inert] *)",
+      );
+      if (!body) return;
+      const room = requests.clientHeight + (timeline?.offsetHeight ?? 0);
+      const around = content.offsetHeight - body.offsetHeight;
+      const most = Math.floor(room - around);
+      // Rounding moves the sum a pixel either way; that is no new room.
+      if (applied !== undefined && Math.abs(most - applied) < 2) return;
+      applied = most;
+      requests.style.setProperty(
+        "--cat-question-max-height",
+        `max(8rem, min(50vh - 7rem, ${most}px))`,
+      );
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    for (const node of [section, requests, content, timeline])
+      if (node) observer.observe(node);
+    return () => {
+      observer.disconnect();
+      requests.style.removeProperty("--cat-question-max-height");
+    };
+  }, [asking]);
   return (
     <div
       className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
@@ -3438,7 +3478,7 @@ function ChatDockContent({
             // Only a chat in front eases: one behind another tab is laid
             // out but not drawn, and easing its padding there resized its
             // chips on every frame of a motion nobody sees.
-            className={`flex w-full flex-col ${arriving || !frontSurface ? "" : "transition-[max-width,padding] duration-250 ease-standard"} ${
+            className={`flex min-h-0 w-full flex-col ${arriving || !frontSurface ? "" : "transition-[max-width,padding] duration-250 ease-standard"} ${
               isTab
                 ? `mx-auto max-w-4xl ${
                     bubbleClearance === "strip"
@@ -3722,46 +3762,56 @@ function ChatDockContent({
                 onAuthorized={chat.resumeAfterAuthentication}
               />
             ))}
-            <div className="max-h-[50vh] overflow-y-auto">
-              {otherRequests.map((request) => (
-                <ApprovalCard
-                  key={request.id}
-                  request={request}
-                  viewerId={authority?.externalUserId}
-                  busy={!expanded || responding.has(request.id)}
-                  onRespond={(response) => respond(request.id, response)}
-                  onOpenUrl={(url) => onLinkClick?.(url, "tab")}
-                />
-              ))}
-              {/* Answered (or dismissed), a question reads as answered at
+            {/* Shrinks before the composer does: a card too short for its
+                requests scrolls them, never pushing the composer out. */}
+            <div
+              ref={requestsRef}
+              className="max-h-[50vh] min-h-0 overflow-y-auto"
+            >
+              {/* Its own box: grows with what it holds while the box around
+                  it is squeezed and scrolls, so the dock sees a question
+                  that finishes opening there. */}
+              <div ref={requestsContentRef}>
+                {otherRequests.map((request) => (
+                  <ApprovalCard
+                    key={request.id}
+                    request={request}
+                    viewerId={authority?.externalUserId}
+                    busy={!expanded || responding.has(request.id)}
+                    onRespond={(response) => respond(request.id, response)}
+                    onOpenUrl={(url) => onLinkClick?.(url, "tab")}
+                  />
+                ))}
+                {/* Answered (or dismissed), a question reads as answered at
                   once: its panel closes as it was while the answer takes
                   its place in the conversation, and one whose answer is
                   refused opens again. */}
-              {shownQuestions.map(
-                ({ item: request, present }) =>
-                  request.questions && (
-                    <ClosingCollapsible key={request.id} open={present}>
-                      <AgentQuestionPanel
-                        questions={request.questions}
-                        blocking={request.blocking}
-                        onSubmit={(response) => {
-                          answerSentHere(request.id);
-                          respond(request.id, response);
-                        }}
-                        onAnswerFiles={addFilesTo}
-                        onDismiss={() =>
-                          respond(request.id, {
-                            kind: "question",
-                            answers: [QUESTIONS_DISMISSED_MESSAGE],
-                          })
-                        }
-                        // A file still attaching to an answer goes with it.
-                        // A closing panel is inert, not dimmed.
-                        disabled={!expanded || pendingTransfers > 0}
-                      />
-                    </ClosingCollapsible>
-                  ),
-              )}
+                {shownQuestions.map(
+                  ({ item: request, present }) =>
+                    request.questions && (
+                      <ClosingCollapsible key={request.id} open={present}>
+                        <AgentQuestionPanel
+                          questions={request.questions}
+                          blocking={request.blocking}
+                          onSubmit={(response) => {
+                            answerSentHere(request.id);
+                            respond(request.id, response);
+                          }}
+                          onAnswerFiles={addFilesTo}
+                          onDismiss={() =>
+                            respond(request.id, {
+                              kind: "question",
+                              answers: [QUESTIONS_DISMISSED_MESSAGE],
+                            })
+                          }
+                          // A file still attaching to an answer goes with it.
+                          // A closing panel is inert, not dimmed.
+                          disabled={!expanded || pendingTransfers > 0}
+                        />
+                      </ClosingCollapsible>
+                    ),
+                )}
+              </div>
             </div>
             <form
               ref={composerFormRef}

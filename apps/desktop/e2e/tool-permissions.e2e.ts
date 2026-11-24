@@ -668,6 +668,68 @@ describe("talking around questions", () => {
     );
   }, 60_000);
 
+  it("a question taller than a floating chat keeps its Submit and the composer in the card", async () => {
+    // Half a tall window is more than a floating chat holds.
+    await app.cdp("Emulation.setDeviceMetricsOverride", {
+      width: 1300,
+      height: 1400,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    try {
+      await settled();
+      await run(`sendHere('a long question to scroll'); return true;`);
+      await runWait(
+        `return !!modal() && modal().textContent.includes('Which benchmark should I run');`,
+        { timeoutMs: 30_000, label: "long question" },
+      );
+      await settle();
+      const fit = await run<{
+        tall: boolean;
+        header: boolean;
+        footer: boolean;
+        submit: boolean;
+        composer: boolean;
+        scrolls: boolean;
+      }>(`
+        const card = hereChat().getBoundingClientRect();
+        const m = modal();
+        const body = [...m.querySelectorAll('[data-question-body]')].find((el) => !el.closest('[inert]'));
+        const inside = (el) => { const r = el.getBoundingClientRect(); return r.top >= card.top - 0.5 && r.bottom <= card.bottom + 0.5; };
+        const submit = byText('section[aria-label="The agent has a question"] button', 'Submit').getBoundingClientRect();
+        return {
+          tall: innerHeight >= 1300 && card.height < innerHeight / 2,
+          header: inside(m.querySelector('header')),
+          footer: inside(m.querySelector('footer')),
+          submit: !!document.elementFromPoint(submit.left + submit.width / 2, submit.top + submit.height / 2)?.closest('footer'),
+          composer: inside(here().closest('form')),
+          scrolls: body.scrollHeight > body.clientHeight + 1,
+        };`);
+      await app.screenshot(
+        `${process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? "/tmp"}/long-question-floating.png`,
+      );
+      expect(fit).toEqual({
+        tall: true,
+        header: true,
+        footer: true,
+        submit: true,
+        composer: true,
+        scrolls: true,
+      });
+      await run(`answer('Micro-benchmark only'); return true;`);
+      await runWait(
+        `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
+        { label: "answered" },
+      );
+      await runWait(
+        `return !modal() && hereLog().split('Running: Micro-benchmark only').length > 2;`,
+        { timeoutMs: 30_000, label: "the second answer reached the agent" },
+      );
+    } finally {
+      await app.cdp("Emulation.clearDeviceMetricsOverride");
+    }
+  }, 60_000);
+
   it("the agent closes a question the conversation settled", async () => {
     await run(`sendHere('blocking question again'); return true;`);
     await runWait(`return !!modal();`, { timeoutMs: 30_000 });

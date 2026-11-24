@@ -530,6 +530,7 @@ function ChipView({
 /** The chips inside a group, opened upward from it. */
 function GroupMembers({
   members,
+  panelRef,
   focusRequest,
   pendingAction,
   onActivate,
@@ -538,6 +539,7 @@ function GroupMembers({
   onClose,
 }: {
   members: readonly Chip[];
+  panelRef: RefObject<HTMLDivElement | null>;
   focusRequest: number | null;
   pendingAction: (chip: Chip) => string | undefined;
   onActivate: (chip: Chip, mode: OpenMode) => void;
@@ -601,6 +603,8 @@ function GroupMembers({
         >
           <ResourceInspector
             label={`Preview ${member.label}`}
+            placement="outside"
+            anchorRef={panelRef}
             disabled={member.preview === false}
             content={
               <ChipPreview
@@ -776,6 +780,8 @@ export const ChipRail = memo(function ChipRail({
     chips.filter((chip) => chip.parentId === id);
   const railRef = useRef<HTMLDivElement>(null);
   const groupSurfaceRef = useRef<HTMLDivElement>(null);
+  // The open list's own box, which its members' previews clear.
+  const groupPanelRef = useRef<HTMLDivElement>(null);
   const theme = useTheme();
   const sizerRef = useRef<HTMLDivElement>(null);
   const flowRef = useRef<HTMLDivElement>(null);
@@ -1432,6 +1438,8 @@ export const ChipRail = memo(function ChipRail({
     >
       {visible &&
         createPortal(
+          // Mounted before any group opens: a member that takes focus while
+          // the list first mounts is already inside it (the chat stays engaged).
           // biome-ignore lint/a11y/noStaticElementInteractions: focus bookkeeping for the portalled group controls
           <div
             ref={groupSurfaceRef}
@@ -1444,6 +1452,7 @@ export const ChipRail = memo(function ChipRail({
             onBlur={onRailBlur}
           >
             <PopPanel
+              ref={groupPanelRef}
               anchorRef={groupAnchor}
               layoutRef={sizerRef}
               minWidth={320}
@@ -1459,6 +1468,7 @@ export const ChipRail = memo(function ChipRail({
             >
               <GroupMembers
                 members={openMembers}
+                panelRef={groupPanelRef}
                 focusRequest={groupFocusRequest}
                 pendingAction={pendingFor}
                 onActivate={activate}

@@ -849,6 +849,7 @@ kbd {
 .cat-composer {
   position: relative;
   scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 /* Dictation's words while they are still being said (voice): muted until
@@ -1003,7 +1004,9 @@ kbd {
 }
 
 /* Resource inspectors enter from and return to their trigger. Keeping the
-   axis side-aware makes the top-right chat inspector read as one object. */
+   axis side-aware makes the top-right chat inspector read as one object.
+   One stacked above or below its trigger moves as the popovers do (pop-in),
+   under its own names: a popover that holds it closes on its own pop-out. */
 @keyframes inspector-in-left {
   from {
     opacity: 0;
@@ -1061,6 +1064,83 @@ kbd {
   animation: inspector-out-right 160ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
+@keyframes inspector-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes inspector-out-above {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+@keyframes inspector-in-below {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes inspector-out-below {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+.animate-inspector-in-above {
+  animation: inspector-in-above 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-inspector-out-above {
+  animation: inspector-out-above 140ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+.animate-inspector-in-below {
+  animation: inspector-in-below 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-inspector-out-below {
+  animation: inspector-out-below 140ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+/* Reduced motion: an inspector fades in place (its own names, so an exit
+   still reads as an inspector's). */
+@keyframes inspector-in-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes inspector-out-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 /* Pairing readiness keeps a fixed QR stage, then resolves the code from a
    soft optical blur. Layout never participates in this transition. */
 @keyframes pairing-qr-in {
@@ -1113,11 +1193,23 @@ kbd {
   }
 
   .animate-pop-in,
-  .animate-pop-out,
+  .animate-pop-out {
+    animation-duration: 100ms;
+  }
+
   .animate-inspector-in-left,
-  .animate-inspector-out-left,
   .animate-inspector-in-right,
-  .animate-inspector-out-right {
+  .animate-inspector-in-above,
+  .animate-inspector-in-below {
+    animation-name: inspector-in-fade;
+    animation-duration: 100ms;
+  }
+
+  .animate-inspector-out-left,
+  .animate-inspector-out-right,
+  .animate-inspector-out-above,
+  .animate-inspector-out-below {
+    animation-name: inspector-out-fade;
     animation-duration: 100ms;
   }
 

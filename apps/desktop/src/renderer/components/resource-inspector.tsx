@@ -38,8 +38,17 @@ export interface InspectorAnchor {
   left: number;
 }
 
+type InspectorPlacement = "side" | "above" | "outside";
+interface InspectorPosition {
+  side: "left" | "right" | "above" | "below";
+  left: number;
+  top: number;
+  maxHeight?: number;
+}
+
 export function computeInspectorPosition({
   anchor,
+  boundary = anchor,
   width,
   height,
   viewportWidth,
@@ -47,48 +56,61 @@ export function computeInspectorPosition({
   placement = "side",
 }: {
   anchor: InspectorAnchor;
+  boundary?: InspectorAnchor;
   width: number;
   height: number;
   viewportWidth: number;
   viewportHeight: number;
   /**
-   * "side" flips left/right of the anchor. "above" stacks over it (below
-   * when there is no room), left-aligned, so a wide panel never lands on
-   * the anchor's own controls such as a pill's remove button.
+   * "side" flips left/right of the boundary. "outside" also tries above or
+   * below it when neither side fits. "above" prefers stacking over the
+   * trigger to clear its inline controls.
    */
-  placement?: "side" | "above";
-}): { side: "left" | "right"; left: number; top: number } {
-  if (placement === "above") {
-    const fitsAbove = anchor.top - GAP - height >= VIEWPORT_MARGIN;
+  placement?: InspectorPlacement;
+}): InspectorPosition {
+  const maxLeft = viewportWidth - width - VIEWPORT_MARGIN;
+  const maxPanelHeight = viewportHeight - 2 * VIEWPORT_MARGIN;
+  const fitsRight = boundary.right + GAP <= maxLeft;
+  const fitsLeft = boundary.left - GAP - width >= VIEWPORT_MARGIN;
+  if (
+    placement === "above" ||
+    (placement === "outside" && !fitsRight && !fitsLeft)
+  ) {
+    const above = boundary.top - GAP - VIEWPORT_MARGIN;
+    const below = viewportHeight - VIEWPORT_MARGIN - boundary.bottom - GAP;
+    const stackAbove = height <= above || (height > below && above >= below);
+    const maxHeight = Math.max(
+      0,
+      Math.min(maxPanelHeight, stackAbove ? above : below),
+    );
     return {
-      side: "right",
-      left: Math.max(
-        VIEWPORT_MARGIN,
-        Math.min(anchor.left, viewportWidth - width - VIEWPORT_MARGIN),
-      ),
-      top: fitsAbove
-        ? anchor.top - GAP - height
-        : Math.min(
-            anchor.bottom + GAP,
-            viewportHeight - height - VIEWPORT_MARGIN,
-          ),
+      side: stackAbove ? "above" : "below",
+      left: Math.max(VIEWPORT_MARGIN, Math.min(anchor.left, maxLeft)),
+      top: stackAbove
+        ? Math.max(
+            VIEWPORT_MARGIN,
+            boundary.top - GAP - Math.min(height, maxHeight),
+          )
+        : Math.max(VIEWPORT_MARGIN, boundary.bottom + GAP),
+      maxHeight,
     };
   }
-  const fitsRight =
-    anchor.right + GAP + width <= viewportWidth - VIEWPORT_MARGIN;
   const side: "left" | "right" = fitsRight ? "right" : "left";
   return {
     side,
     left: Math.max(
       VIEWPORT_MARGIN,
       Math.min(
-        fitsRight ? anchor.right + GAP : anchor.left - width - GAP,
-        viewportWidth - width - VIEWPORT_MARGIN,
+        fitsRight ? boundary.right + GAP : boundary.left - width - GAP,
+        maxLeft,
       ),
     ),
     top: Math.max(
       VIEWPORT_MARGIN,
-      Math.min(anchor.top, viewportHeight - height - VIEWPORT_MARGIN),
+      Math.min(
+        anchor.top,
+        viewportHeight - Math.min(height, maxPanelHeight) - VIEWPORT_MARGIN,
+      ),
     ),
   };
 }
@@ -196,7 +218,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   disabled?: boolean;
   testId?: string;
   /** Where the panel sits relative to its trigger; see computeInspectorPosition. */
-  placement?: "side" | "above";
+  placement?: InspectorPlacement;
   /**
    * What the panel sits beside, when more than the trigger: the list the
    * trigger is a row of, or the sidebar it heads, so the panel clears that
@@ -251,19 +273,13 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     if (dragging.current || disabled) return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const beside = anchorRef?.current?.getBoundingClientRect() ?? rect;
-    setAnchor({
-      top: rect.top,
-      right: beside.right,
-      bottom: rect.bottom,
-      left: beside.left,
-    });
+    setAnchor(rect);
     pointer.current = enteredAt.current;
     clearTimeout(warmTimer.current);
     setMounted(true);
     setOpen(true);
     setWarming(false);
-  }, [disabled, anchorRef]);
+  }, [disabled]);
   useEffect(() => {
     if (!disabled) return;
     clearTimeout(openTimer.current);
@@ -531,6 +547,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           id={id}
           label={label}
           anchor={anchor}
+          boundaryRef={anchorRef}
           placement={placement}
           open={open}
           onEnter={(input) => {
@@ -565,6 +582,7 @@ export function InspectorPortal({
   id,
   label,
   anchor,
+  boundaryRef,
   placement = "side",
   open,
   onEnter,
@@ -576,7 +594,13 @@ export function InspectorPortal({
   id: string;
   label: string;
   anchor: InspectorAnchor;
-  placement?: "side" | "above";
+  /**
+   * What the panel clears besides the trigger. Measured when it is placed,
+   * not when it opened: a list that mounts with its focused row has a box
+   * only once that commit lands.
+   */
+  boundaryRef?: RefObject<Element | null>;
+  placement?: InspectorPlacement;
   open: boolean;
   /** The pointer or focus entered the panel. */
   onEnter: (input: InspectorInput) => void;
@@ -687,11 +711,7 @@ export function InspectorPortal({
     observer?.observe(node);
     return () => observer?.disconnect();
   }, []);
-  const [position, setPosition] = useState<{
-    left: number;
-    top: number;
-    side: "left" | "right";
-  }>({
+  const [position, setPosition] = useState<InspectorPosition>({
     left: anchor.right + GAP,
     top: anchor.top,
     side: "right",
@@ -703,9 +723,11 @@ export function InspectorPortal({
       setPosition(
         computeInspectorPosition({
           anchor,
+          boundary: boundaryRef?.current?.getBoundingClientRect(),
           placement,
           width: panel.offsetWidth,
-          height: panel.offsetHeight,
+          height:
+            height && Number.isFinite(height) ? height : panel.offsetHeight,
           viewportWidth: window.innerWidth,
           viewportHeight: window.innerHeight,
         }),
@@ -722,7 +744,9 @@ export function InspectorPortal({
       observer?.disconnect();
       window.removeEventListener("resize", updatePosition);
     };
-  }, [anchor, placement]);
+  }, [anchor, boundaryRef, height, placement]);
+
+  const motion = `animate-inspector-${open ? "in" : "out"}-${position.side}`;
 
   useEffect(() => {
     if (open) return;
@@ -757,6 +781,7 @@ export function InspectorPortal({
         left: position.left,
         top: position.top,
         height: height ?? undefined,
+        maxHeight: position.maxHeight,
       }}
       data-settled={settled || undefined}
       onPointerEnter={() => onEnter("pointer")}
@@ -786,7 +811,7 @@ export function InspectorPortal({
       onTransitionEnd={onGlide(false)}
       onTransitionCancel={onGlide(false)}
       // Over a window's drag row its buttons must still take clicks.
-      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 ${gliding ? "overflow-y-hidden" : "overflow-y-auto"} overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-standard motion-reduce:transition-none" : ""} ${!shown ? "pointer-events-none opacity-0" : open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
+      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 ${gliding ? "overflow-y-hidden" : "overflow-y-auto"} overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-standard motion-reduce:transition-none" : ""} ${!visible ? "pointer-events-none opacity-0" : ""} ${shown ? motion : ""}`}
     >
       <InspectorPendingContext.Provider value={report}>
         <div ref={content}>{children}</div>

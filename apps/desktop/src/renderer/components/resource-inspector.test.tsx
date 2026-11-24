@@ -1028,7 +1028,7 @@ it("stacks above the anchor when asked, and below only when there is no room", (
       viewportWidth: 800,
       viewportHeight: 600,
     }),
-  ).toEqual({ side: "right", left: 200, top: 272 });
+  ).toMatchObject({ side: "above", left: 200, top: 272 });
   const cramped = computeInspectorPosition({
     placement: "above",
     anchor: { top: 20, right: 260, bottom: 40, left: 200 },
@@ -1039,6 +1039,30 @@ it("stacks above the anchor when asked, and below only when there is no room", (
   });
   expect(cramped.top).toBe(48);
   expect(cramped.left).toBe(200);
+  expect(cramped.side).toBe("below");
+});
+
+it("clears the entire list when a member's preview would overlap its actions", () => {
+  const input = {
+    placement: "outside" as const,
+    anchor: { left: 205, top: 260, right: 470, bottom: 288 },
+    boundary: { left: 200, top: 230, right: 520, bottom: 360 },
+    width: 320,
+    height: 280,
+    viewportWidth: 900,
+    viewportHeight: 550,
+  };
+  expect(computeInspectorPosition(input)).toEqual({
+    side: "right",
+    left: 528,
+    top: 260,
+  });
+  expect(computeInspectorPosition({ ...input, viewportWidth: 800 })).toEqual({
+    side: "above",
+    left: 205,
+    top: 8,
+    maxHeight: 214,
+  });
 });
 
 it("clamps a stale anchor after the viewport shrinks", () => {

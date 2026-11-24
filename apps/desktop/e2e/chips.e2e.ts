@@ -641,7 +641,8 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
       label: `Fixture note ${i}`,
       parentId: "notes-group",
       icon: "File",
-      preview: false,
+      preview: i === 0 ? undefined : false,
+      actions: [{ action: "mark", label: "Mark note", icon: "Check" }],
       contextMenu: [{ action: "choose", label: "Choose note" }],
     })),
   ];
@@ -658,7 +659,7 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
   );
   fs.writeFileSync(
     path.join(projectRoot, ".work/group-chip-fixture/index.ts"),
-    `export default {load(){return {items:${JSON.stringify(groups)}}},action({itemId}){return {message:'Opened '+itemId}}}`,
+    `export default {load(){return {items:${JSON.stringify(groups)}}},action({action,itemId}){return {message:(action==='mark'?'Marked ':'Opened ')+itemId}}}`,
   );
   fs.writeFileSync(
     path.join(projectRoot, ".work/workspace.js"),
@@ -690,6 +691,22 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
       `const button=chip(${JSON.stringify(id)})?.querySelector('[data-chip-main]'),panel=${panel};if(!button||!panel||button.getAttribute('aria-controls')!==panel.id)return false;if(panel.getAnimations().some(a=>a.playState==='running'))return false;const a=button.getBoundingClientRect(),p=panel.getBoundingClientRect();return Math.abs(p.left-Math.max(8,Math.min(a.left,innerWidth-p.width-8)))<2&&Math.abs(a.top-p.bottom-8)<2&&Math.abs(p.width-320)<2&&p.height<=256.5;`,
       { label: `${id} panel follows its own trigger` },
     );
+  const hoverPreview = async () => {
+    await app.movePointer(await member("notes-group"));
+    const action = await wait<{ x: number; y: number }>(
+      `const list=${panel},card=document.querySelector('[data-resource-inspector][data-open][aria-label="Preview Fixture note 0"]');
+       const button=list?.querySelector('[data-chip-button="mark"]');
+       if (!card || !button || card.getAnimations().some(a=>a.playState==='running')) return false;
+       const p=list.getBoundingClientRect(), c=card.getBoundingClientRect(), b=button.getBoundingClientRect();
+       const x=b.x+b.width/2, y=b.y+b.height/2;
+       const apart=c.left>=p.right+7||c.right<=p.left-7||c.bottom<=p.top-7||c.top>=p.bottom+7;
+       return apart&&button.contains(document.elementFromPoint(x,y)) ? {x,y} : false;`,
+      {
+        label: "the member preview clears the list and its action is clickable",
+      },
+    );
+    return action;
+  };
   const backdrop = http.createServer((_request, response) => {
     response.setHeader("Content-Type", "text/html");
     response.end("<title>Chip backdrop</title><body>Local chip fixture</body>");
@@ -718,8 +735,17 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
       );
     await clickChip("notes-group");
     await aligned("notes-group");
+    await hoverPreview();
+    if (process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR)
+      await app.screenshot(
+        path.join(
+          process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR,
+          "chip-group-preview.png",
+        ),
+      );
     await app.eval("window.catamorphicDesktop.devWindow('setSize',760,700)");
     await aligned("notes-group");
+    const mark = await hoverPreview();
     if (process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR)
       await app.screenshot(
         path.join(
@@ -727,6 +753,11 @@ it("anchors each group to its own chip through switching and wrapped reflow", as
           "chip-group-wrapped.png",
         ),
       );
+    await app.clickPointer(mark);
+    await wait(
+      `return rail().querySelector('[role="status"]')?.textContent==='Marked note-0';`,
+      { label: "the hovered member's inline action ran" },
+    );
     // A member's menu sits above the group and its shield, never underneath it.
     const point = await member("notes-group");
     for (const type of ["mousePressed", "mouseReleased"])
