@@ -323,7 +323,7 @@ name or silently hide members behind a count.
 A member's preview aligns to its row and clears the whole group, on the right
 when there is room and on the left otherwise. Narrow windows place the preview
 above or below the group with its own scrollable space. Side previews glide from
-the anchor's side. Stacked previews use the shared popover motion. Reduced
+the anchor's side. Stacked previews move as the other popovers do. Reduced
 motion uses a fade in place.
 
 Agent-created terminal chips use the command as their initial name so grouped

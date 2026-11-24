@@ -746,12 +746,7 @@ export function InspectorPortal({
     };
   }, [anchor, boundaryRef, height, placement]);
 
-  const stacked = position.side === "above" || position.side === "below";
-  const motion = stacked
-    ? open
-      ? "animate-pop-in"
-      : "animate-pop-out"
-    : `animate-inspector-${open ? "in" : "out"}-${position.side}`;
+  const motion = `animate-inspector-${open ? "in" : "out"}-${position.side}`;
 
   useEffect(() => {
     if (open) return;
@@ -805,13 +800,18 @@ export function InspectorPortal({
         onLeave("focus");
       }}
       onAnimationEnd={(event) => {
-        if (event.target === event.currentTarget && !open) onExited();
+        if (
+          event.target === event.currentTarget &&
+          event.animationName.startsWith("inspector-out-") &&
+          !open
+        )
+          onExited();
       }}
       onTransitionRun={onGlide(true)}
       onTransitionEnd={onGlide(false)}
       onTransitionCancel={onGlide(false)}
       // Over a window's drag row its buttons must still take clicks.
-      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 ${gliding ? "overflow-y-hidden" : "overflow-y-auto"} overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-standard motion-reduce:transition-none" : ""} ${position.side === "below" ? "[--pop-offset-y:-4px]" : ""} ${!visible ? "pointer-events-none opacity-0" : ""} ${shown ? motion : ""}`}
+      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 ${gliding ? "overflow-y-hidden" : "overflow-y-auto"} overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-standard motion-reduce:transition-none" : ""} ${!visible ? "pointer-events-none opacity-0" : ""} ${shown ? motion : ""}`}
     >
       <InspectorPendingContext.Provider value={report}>
         <div ref={content}>{children}</div>
