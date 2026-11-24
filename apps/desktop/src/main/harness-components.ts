@@ -109,13 +109,13 @@ interface PlatformRelease {
   bunIntegrity: `sha512-${string}`;
 }
 
-const CLAUDE_VERSION = "0.3.326";
+const CLAUDE_VERSION = "0.3.331";
 /**
  * The Claude Code CLI release the bundled Agent SDK ships with: an installed
  * Claude Code at this version or newer runs instead of Work's own copy
  * (ADR 0196). scripts/harness-bump.ts moves it with CLAUDE_VERSION.
  */
-export const CLAUDE_CODE_MIN_VERSION = "2.1.326";
+export const CLAUDE_CODE_MIN_VERSION = "2.1.331";
 const CODEX_VERSION = "0.169.0";
 const BUN_VERSION = "1.4.4";
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
@@ -129,7 +129,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "darwin-arm64": {
     rustTarget: "aarch64-apple-darwin",
     claudeIntegrity:
-      "sha512-D3ZbowCMdKNet0YPZlsJxdJUW1t1Q8KLy1BwNd+5eilf18TlCRtWZlm8DrewFLmu/gxBK7gcsq6uysrIVbPyQg==",
+      "sha512-PQrn7YTiSV5Bg+ueF2hNvswc+wI7YKC2c32XNedvs6vfMCUUnIlq93VEbZiRY23b+JIVkEm8gb1VhkJTjsYISQ==",
     codexIntegrity:
       "sha512-5WsWFBbVP78D+6FvNo1MMVxLPZdmcoQlqVJFrF4qx/TmvneLnMQKtLyXkUo54XOTDfoYKpNouTJ/F7gTVA8FnQ==",
     bunIntegrity:
@@ -138,7 +138,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "darwin-x64": {
     rustTarget: "x86_64-apple-darwin",
     claudeIntegrity:
-      "sha512-m8K3Im2S8STdAVBrriuDZyJcnjsu/Vc3476wIOqTAefnCCdtdZ4AHcOcWxt+4KIHE5Vx1qT2qacTRrQBaVVweA==",
+      "sha512-dc3iB+CY3jDpKpDpmvYc4V+UKSkudY29iJ62p0s5TK3h+b7Wqa2Hv0bPow0LUs4ZzDUXxEtCEHzk9X29VfLovw==",
     codexIntegrity:
       "sha512-K1FKSsSLl9v3z5TeagBQXyQRDBIGB5Jncy5dxsRxwT3aaTqN3AI8VrCfoxBxKMOOU9O2QX1vg7WkBwNVth/s9A==",
     bunIntegrity:
@@ -147,7 +147,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "linux-arm64": {
     rustTarget: "aarch64-unknown-linux-musl",
     claudeIntegrity:
-      "sha512-nYVN8jCcH490DCXIvby7rllzQFxLzKeKClfo2u/yv7mx3ipZQv344caULL/amwZ8w8GUzYyZ8hnS6pI9goSq+A==",
+      "sha512-xiRxBxoM8Qa5fnjCFk5iFheL5GUroLuHPJ7UnD4v2Sv1tWxGoSL67AYnMZ6OdjMguZK09X4WlgOn1nL1m6NEOA==",
     codexIntegrity:
       "sha512-NZ/DaQUpcQmxmqee7Z9uC1rzw3GhSbooawcaTe1LN5Yk+WlinUKGdTXJgClRT/9ogQEEM9TWxYzvxPfj5G/xFg==",
     bunIntegrity:
@@ -156,7 +156,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "linux-x64": {
     rustTarget: "x86_64-unknown-linux-musl",
     claudeIntegrity:
-      "sha512-WMhDY07gk2O0E8FXTbrVYmPjSLFaYPDCPwsNueVxm6vZ7ek+lPaKuOMAxTb1K07TzSmTOexoWeX2Y9VrbVDMpw==",
+      "sha512-nfHSiLJdkpsVAFsXTriyW3r64gS1sp5zxvaoF2dmNqKixR4rf9ISDDi81gF9L1uk/bAEcBGRx34U6Itw+NYIEg==",
     codexIntegrity:
       "sha512-o05NyAOCDygSPRo1yinzxvkRSdmsZyBD9E7mbpmjRanSfM8lypqWtQgEo4XfNkwhuCR2aFu8mlGOsQGFXVbVww==",
     bunIntegrity:
@@ -165,7 +165,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "win32-arm64": {
     rustTarget: "aarch64-pc-windows-msvc",
     claudeIntegrity:
-      "sha512-S+Ai+HhGRVFfTDmYWRfTrdWF3b4KMsfLSThZCqRJ0WCOKOXrRShMKV1hqqHBljx/wkMDPCpY0V/9S/e6w57eGQ==",
+      "sha512-FsPHWUpgHBFgSZESwM53JsbEoQiWPnigSCyjSfHDyiWnH66e0NsuksuJ/Nu9qI8UVgBDh/y1NOnnd4eGrB3eFQ==",
     codexIntegrity:
       "sha512-nTN9SpkacGohq60+I80R3t0R8Mhbnlt3OVYNahgAv1Gu77KFwhPc0vz9Ou/DAGDtYhKVWA/jiYXJXnlzkwb/JA==",
     bunIntegrity:
@@ -174,7 +174,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "win32-x64": {
     rustTarget: "x86_64-pc-windows-msvc",
     claudeIntegrity:
-      "sha512-Yn1gZXYFuHmjHz7SpHx4TqDcRDsC8TfwWcntJdYjFzMWm+caPAp6QRqr/aTvirjqVA1D+D8Rd29xhuytpE3xTQ==",
+      "sha512-AsLur4ov9MGTQTrnZ49ZDPasQ35U3X/rZDdF/rPhytN3h1F3w/0IkC6esW3OzldvPlci60QvggOLVGnFlUzdxw==",
     codexIntegrity:
       "sha512-nC+McFU8xRNL9tk3IhxcKdhcyOElwF/HhPO+gzSQCY7yjh3XdzSajX+MYWcHUVHWRHajfwn3/WgJYJK2wS+XWg==",
     bunIntegrity:
