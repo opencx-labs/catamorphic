@@ -1629,6 +1629,18 @@ export interface WorkShares {
   title: string;
 }
 
+export interface WorkspaceCheckouts {
+  commit_sha: string;
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  project_id: string;
+  revoked_at: Timestamp | null;
+  session_id: string;
+  tenant_id: string;
+  token_hash: string;
+}
+
 export interface WorkTokenFamilies {
   client_id: string;
   created_at: Generated<Timestamp>;
@@ -1774,4 +1786,5 @@ export interface DB {
   workflow_runs: WorkflowRuns;
   workflow_signals: WorkflowSignals;
   workflow_step_attempts: WorkflowStepAttempts;
+  workspace_checkouts: WorkspaceCheckouts;
 }

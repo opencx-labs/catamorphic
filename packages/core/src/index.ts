@@ -1057,6 +1057,12 @@ export {
   WorkflowsService,
 } from "./services/workflows-service.js";
 export {
+  type CheckoutRequest,
+  checkoutTarget,
+  type IssuedCheckout,
+  WorkspaceCheckoutsService,
+} from "./services/workspace-checkouts.js";
+export {
   parseSetupRecord,
   planWorkspaceSetup,
   SETUP_LOG_TAIL_LINES,

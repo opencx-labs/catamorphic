@@ -44,6 +44,7 @@ import type {
   PlacementWaitTarget,
 } from "./placement-waits.js";
 import {
+  DEFAULT_CHECKOUT_TIMEOUT_MINUTES,
   DEFAULT_IDLE_RELEASE_MINUTES,
   DEFAULT_SETUP_TIMEOUT_MINUTES,
   type ProjectEnvironmentDefinition,
@@ -78,6 +79,11 @@ export interface EnvironmentAdmission {
    * the Allocation fixed what that is when it was admitted.
    */
   setup?: AdmittedSetup;
+  /**
+   * How a new workspace fetches its base (ADR 0353), as the Environment
+   * says now; absent, Work's own command fetches it whole.
+   */
+  checkout?: AdmittedCheckout;
   /** How long unattended escalations wait for a person (ADR 0176). */
   approvals?: { waitMinutes: number };
   /**
@@ -136,6 +142,12 @@ export interface EnvironmentAdmitArgs {
    * that reports no disk still takes it.
    */
   fill?: { storageMb: number };
+}
+
+/** An Environment's checkout as admission reads it (ADR 0353). */
+export interface AdmittedCheckout {
+  command: string;
+  timeoutMinutes: number;
 }
 
 /** An Environment's setup as admission reads it (ADRs 0208, 0257). */
@@ -926,6 +938,16 @@ export class ExecutionEnvironmentsService {
                 ...(definition.setup.secrets
                   ? { secrets: definition.setup.secrets }
                   : {}),
+              },
+            }
+          : {}),
+        ...(definition.checkout
+          ? {
+              checkout: {
+                command: definition.checkout.command,
+                timeoutMinutes:
+                  definition.checkout.timeoutMinutes ??
+                  DEFAULT_CHECKOUT_TIMEOUT_MINUTES,
               },
             }
           : {}),

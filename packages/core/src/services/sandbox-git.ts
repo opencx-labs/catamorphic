@@ -6,6 +6,7 @@ import {
   isSessionBranchName,
   nativeGit,
   seedPackInstallScript,
+  seedPackParts,
   shellQuote,
 } from "@catamorphic/git";
 import {
@@ -52,18 +53,28 @@ async function run(input: {
   what: string;
   /** Where in a sandbox that runs commands apart (ADR 0332). */
   side?: SandboxSide;
+  /** Seconds; ten minutes when absent. */
+  timeout?: number;
+  env?: Record<string, string>;
+  /** Values that must not appear in a failure's text. */
+  mask?: readonly string[];
 }): Promise<string> {
   const result = await input.provider.executeCommand(
     input.sandboxId,
     input.command,
     {
       cwd: input.cwd,
-      timeout: 600,
+      timeout: input.timeout ?? 600,
       ...(input.side ? { side: input.side } : {}),
+      ...(input.env ? { env: input.env } : {}),
     },
   );
-  if (result.exitCode !== 0)
-    throw new Error(`Failed to ${input.what}: ${result.result.slice(-2000)}`);
+  if (result.exitCode !== 0) {
+    let text = result.result.slice(-2000);
+    for (const value of input.mask ?? [])
+      if (value) text = text.replaceAll(value, "***");
+    throw new Error(`Failed to ${input.what}: ${text}`);
+  }
   return result.result;
 }
 
@@ -73,16 +84,56 @@ function originScript(originUrl: string | null): string {
   return `(git remote get-url origin >/dev/null 2>&1 && git remote set-url origin ${url} || git remote add origin ${url})`;
 }
 
+/** What every uploaded seed pack's parts are named after, beside the project. */
+const SEED_PACKS = "seed-*.pack.b64";
+
+/**
+ * Upload a seed pack into the session directory, one part an operation,
+ * so no operation grows with the pack (ADR 0353), and answer the name its
+ * parts carry. Each upload has a name of its own: parts an interrupted
+ * upload left behind are never read into a later pack.
+ */
+async function uploadSeedPack(input: {
+  provider: SandboxProvider;
+  sandboxId: string;
+  pack: Uint8Array;
+}): Promise<string> {
+  const directory = `${input.provider.workspaceRoot}/${SESSION_DIRECTORY}`;
+  const name = SEED_PACKS.replace("*", randomUUID());
+  for (const part of seedPackParts({ pack: input.pack, name }))
+    await input.provider.uploadFiles(
+      input.sandboxId,
+      { [part.name]: part.content },
+      directory,
+    );
+  return name;
+}
+
+/**
+ * Shell that installs an uploaded seed pack and removes every seed pack's
+ * parts, those an earlier upload left behind included.
+ */
+function installSeedPack(input: { name: string; shallow: string[] }): string {
+  return [
+    seedPackInstallScript({
+      packFile: `../${SESSION_DIRECTORY}/${input.name}`,
+      shallow: input.shallow,
+    }),
+    `rm -f ../${SESSION_DIRECTORY}/${SEED_PACKS}.*`,
+  ].join(" && ");
+}
+
 /**
  * Seed (or re-seed after a base move) the sandbox repository from the
  * session's copy on the control plane (ADR 0344): the agent's HEAD and its
- * history back to the workspace base, and the working tree as last saved,
- * arrive as one shallow pack, uploaded rather than fetched, so seeding
- * costs no Git traffic and needs no credential. The checkout comes back
- * on the agent's branch at its HEAD, with what it had not committed
- * uncommitted again (what was staged comes back unstaged). Does nothing
- * when the sandbox already stands on this base, or was seeded and lost
- * its repository since.
+ * history back to the workspace base, and the working tree as last saved.
+ * The base itself is fetched (`fetchBase`, ADR 0353) when the checkout
+ * does not hold it yet; what the session added to it arrives as a pack,
+ * uploaded, so it needs no credential. Without `fetchBase` the pack holds
+ * the base too. The checkout comes back on the agent's branch at its HEAD,
+ * with what it had not committed uncommitted again (what was staged comes
+ * back unstaged). Does nothing when the sandbox already stands on this
+ * base, or was seeded and lost its repository since.
  */
 export async function seedSandboxRepository(input: {
   provider: SandboxProvider;
@@ -104,23 +155,37 @@ export async function seedSandboxRepository(input: {
    * move.
    */
   afterSetup?: boolean;
+  /**
+   * Bring the base commit into the checkout with the Environment's
+   * checkout command (ADR 0353), and say whether it is there now. Called
+   * only when the checkout lacks it.
+   */
+  fetchBase?: () => Promise<boolean>;
 }): Promise<{ seeded: boolean }> {
-  const current = input.afterSetup
-    ? undefined
-    : await input.provider.executeCommand(
-        input.sandboxId,
-        // A checkout that was seeded and has no base now lost its
-        // repository (the agent moved or broke it): it says `lost`.
-        `git rev-parse -q --verify refs/work/base 2>/dev/null || { [ -e ../${SESSION_DIRECTORY}/${SEEDED_FILE} ] && echo lost; } || true`,
-        { cwd: input.projectDir },
-      );
-  const stands = current?.exitCode === 0 ? current.result.trim() : "";
+  const base = shellQuote(`${input.base}^{commit}`);
+  const current = await input.provider.executeCommand(
+    input.sandboxId,
+    // Whether the base commit is here already, then where the checkout
+    // stands. One that was seeded and has no base now lost its repository
+    // (the agent moved or broke it): it says `lost`.
+    `git cat-file -e ${base} 2>/dev/null && echo holds-base; git rev-parse -q --verify refs/work/base 2>/dev/null || { [ -e ../${SESSION_DIRECTORY}/${SEEDED_FILE} ] && echo lost; } || true`,
+    { cwd: input.projectDir },
+  );
+  const lines =
+    current.exitCode === 0 ? current.result.trim().split(/\s+/) : [];
+  // After a setup the refs are not asked: its checkout is seeded whatever
+  // they say.
+  const stands = input.afterSetup
+    ? ""
+    : (lines.filter((line) => line !== "holds-base").at(-1) ?? "");
   // Seeding replaces what the checkout holds. One that lost its repository
   // may hold work no save could read: it is left as it is, and its saves
   // say why they fail until the agent puts the repository back.
   if (stands === input.base || stands === "lost") return { seeded: false };
   if (!isSessionBranchName(input.branch))
     throw new Error("The session's branch cannot be checked out");
+  const holdsBase =
+    lines.includes("holds-base") || ((await input.fetchBase?.()) ?? false);
   const tree = (
     await nativeGit(input.sessionCopyPath, [
       "rev-parse",
@@ -128,18 +193,16 @@ export async function seedSandboxRepository(input: {
       `${input.checkpoint}^{tree}`,
     ])
   ).trim();
-  const { pack, shallow } = await buildSeedPack({
+  const { pack, shallow, objects } = await buildSeedPack({
     repoPath: input.sessionCopyPath,
     head: input.head,
     base: input.base,
     tree,
+    holdsBase,
   });
-  const root = input.provider.workspaceRoot;
-  await input.provider.uploadFiles(
-    input.sandboxId,
-    { "seed.pack.b64": Buffer.from(pack).toString("base64") },
-    `${root}/${SESSION_DIRECTORY}`,
-  );
+  // A session that added nothing to its base has nothing to send.
+  const uploaded =
+    objects > 0 ? await uploadSeedPack({ ...input, pack }) : undefined;
   const branch = shellQuote(input.branch);
   await run({
     ...input,
@@ -147,10 +210,7 @@ export async function seedSandboxRepository(input: {
     what: "seed the sandbox repository",
     command: [
       "(git rev-parse --git-dir >/dev/null 2>&1 || git init -q -b main)",
-      seedPackInstallScript({
-        packFile: `../${SESSION_DIRECTORY}/seed.pack.b64`,
-        shallow,
-      }),
+      ...(uploaded ? [installSeedPack({ name: uploaded, shallow })] : []),
       // The agent's branch at its HEAD. After a setup, what it changed in
       // tracked files stays (a trusted procedure copied over the change's
       // own, ADR 0324) unless the agent's commits changed the same files.
@@ -166,6 +226,9 @@ export async function seedSandboxRepository(input: {
       `git update-ref refs/work/base ${input.base}`,
       `git update-ref refs/work/synced "$(git ${AGENT} commit-tree ${tree} -m synced)"`,
       // From here on a checkout without a repository is one that lost it.
+      // Nothing was uploaded for a session that added nothing to its
+      // base, so the session directory may not be there yet.
+      `mkdir -p ../${SESSION_DIRECTORY}`,
       `: > ../${SESSION_DIRECTORY}/${SEEDED_FILE}`,
       originScript(input.originUrl),
     ].join(" && "),
@@ -176,9 +239,10 @@ export async function seedSandboxRepository(input: {
 /**
  * Seed the sandbox repository with the workspace's base commit alone (ADR
  * 0257): all a setup on its own network may see. Uploaded as one shallow
- * pack, like {@link seedSandboxRepository}, so it needs no grant. It leaves
- * `refs/work/base` unset, so that seeding still brings the session's saved
- * work once the sandbox is narrow again.
+ * pack, so it needs no grant and no gateway: how a host whose sandboxes
+ * cannot fetch gets its base (ADR 0353). It leaves `refs/work/base` unset,
+ * so that seeding still brings the session's saved work once the sandbox
+ * is narrow again.
  */
 export async function seedSandboxBase(input: {
   provider: SandboxProvider;
@@ -193,11 +257,7 @@ export async function seedSandboxBase(input: {
     base: input.base,
   });
   const root = input.provider.workspaceRoot;
-  await input.provider.uploadFiles(
-    input.sandboxId,
-    { "seed.pack.b64": Buffer.from(pack).toString("base64") },
-    `${root}/${SESSION_DIRECTORY}`,
-  );
+  const uploaded = await uploadSeedPack({ ...input, pack });
   // Paths relative to the workspace root, the command's folder: only that
   // is resolved for commands on every provider.
   const project = path.posix.relative(root, input.projectDir);
@@ -209,14 +269,87 @@ export async function seedSandboxBase(input: {
       `mkdir -p ${shellQuote(project)}`,
       `cd ${shellQuote(project)}`,
       "(git rev-parse --git-dir >/dev/null 2>&1 || git init -q -b main)",
-      seedPackInstallScript({
-        packFile: `../${SESSION_DIRECTORY}/seed.pack.b64`,
-        shallow,
-      }),
+      installSeedPack({ name: uploaded, shallow }),
       `git checkout -q -f --detach ${input.base}`,
       // Nothing but the base: ignored files too.
       "git clean -ffdqx",
     ].join(" && "),
+  });
+}
+
+/** The Git remote a checkout command fetches a workspace's base from. */
+export const CHECKOUT_REMOTE = "work";
+
+/** A workspace's base as its sandbox fetches it (ADR 0353). */
+export interface SandboxCheckout {
+  /** `<gateway>/checkout/<id>`, as the sandbox reaches it. */
+  url: string;
+  /** The checkout's token, held in the command's environment only. */
+  token: string;
+  /** The Environment's command, or Work's own. */
+  command: string;
+  /** Seconds the command may run. */
+  timeoutSeconds: number;
+}
+
+/**
+ * Bring the workspace's base commit into the sandbox by running a checkout
+ * command there (ADR 0353). The project folder is made a Git repository
+ * whose remote `work` serves that commit and its tree and nothing else;
+ * the command runs in it with `WORK_BASE` naming the commit and the
+ * checkout's token in its environment, written to no file. When the
+ * command ends, HEAD must be that commit: the id is the content's own
+ * hash, so a checkout that names it holds it. The remote goes with the
+ * token, unless the command left objects out (`--filter`): a partial clone
+ * reads those through its remote, so it stays, without a credential, and
+ * whatever is asked of it later is refused, saying why.
+ */
+export async function checkoutSandboxBase(input: {
+  provider: SandboxProvider;
+  sandboxId: string;
+  projectDir: string;
+  base: string;
+  checkout: SandboxCheckout;
+}): Promise<void> {
+  const { checkout } = input;
+  if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(input.base))
+    throw new Error("A workspace's base is a full commit id");
+  const root = input.provider.workspaceRoot;
+  // Paths relative to the workspace root, the command's folder: only that
+  // is resolved for commands on every provider.
+  const project = path.posix.relative(root, input.projectDir);
+  const url = shellQuote(checkout.url);
+  await run({
+    ...input,
+    cwd: root,
+    what: "check out the workspace's base",
+    timeout: checkout.timeoutSeconds,
+    mask: [checkout.token],
+    env: {
+      WORK_BASE: input.base,
+      GIT_TERMINAL_PROMPT: "0",
+      // Read by every Git the command runs, and by nothing after it.
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: `http.${checkout.url}.extraHeader`,
+      GIT_CONFIG_VALUE_0: `Authorization: Bearer ${checkout.token}`,
+    },
+    command: `${[
+      `mkdir -p ${shellQuote(project)}`,
+      `cd ${shellQuote(project)}`,
+      "(git rev-parse --git-dir >/dev/null 2>&1 || git init -q -b main)",
+      `(git remote get-url ${CHECKOUT_REMOTE} >/dev/null 2>&1 && git remote set-url ${CHECKOUT_REMOTE} ${url} || git remote add ${CHECKOUT_REMOTE} ${url})`,
+      // In a shell of its own, as a setup's command runs (`bash -e`): its
+      // first failing line fails it, and whatever it changes of its shell
+      // (its folder, its options) ends with it.
+      `bash -ec ${shellQuote(checkout.command)}`,
+      `{ [ "$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null)" = "$WORK_BASE" ] || { echo "The checkout command ended without the workspace's base checked out: HEAD is $(git rev-parse -q --verify HEAD 2>/dev/null || echo unset), and the base is $WORK_BASE. It fetches $WORK_BASE from the remote ${CHECKOUT_REMOTE} and checks it out." >&2; false; }; }`,
+      // A remote nothing can be fetched from any more goes, unless the
+      // checkout left objects out: Git reads those through it.
+      `{ [ "$(git config --get remote.${CHECKOUT_REMOTE}.promisor)" = true ] || git remote remove ${CHECKOUT_REMOTE}; }`,
+      // A checkout that failed leaves no remote behind either.
+    ].join(
+      " && ",
+    )} || { status=$?; git remote remove ${CHECKOUT_REMOTE} >/dev/null 2>&1; exit $status; }`,
   });
 }
 

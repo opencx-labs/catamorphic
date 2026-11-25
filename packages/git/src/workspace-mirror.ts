@@ -279,14 +279,19 @@ export async function moveCheckoutBase(opts: {
  * the real commits (so `git log`, `diff`, and pushes of new branches work)
  * without the repository's history before the base. With `tree`, the pack
  * also holds that tree whole: a session's working tree as last saved (ADR
- * 0344), which its sandbox puts back on top of `head`.
+ * 0344), which its sandbox puts back on top of `head`. With `holdsBase`
+ * the receiver already has the base commit and its tree (it fetched them,
+ * ADR 0353), so the pack holds only what the session added: its commits,
+ * and the files of the saved tree that differ from the base's. `objects`
+ * counts what the pack holds; an empty one need not travel.
  */
 export async function buildSeedPack(opts: {
   repoPath: string;
   head: string;
   base: string;
   tree?: string;
-}): Promise<{ pack: Uint8Array; shallow: string[] }> {
+  holdsBase?: boolean;
+}): Promise<{ pack: Uint8Array; shallow: string[]; objects: number }> {
   for (const id of [opts.head, opts.base, ...(opts.tree ? [opts.tree] : [])])
     if (!COMMIT.test(id)) throw new Error("A seed pack names full object ids");
   const objects = path.resolve(
@@ -313,22 +318,81 @@ export async function buildSeedPack(opts: {
       `${objects}\n`,
     );
     await fs.writeFile(path.join(directory, "shallow"), `${opts.base}\n`);
+    // The base's tree is left out by name as well as its commit: a walk
+    // that finds no commit to send (a head still on its base) never
+    // reaches the base's tree to leave it out, and would send the saved
+    // tree whole.
+    const held = opts.holdsBase
+      ? [
+          `^${opts.base}`,
+          `^${(await nativeGit(directory, ["rev-parse", "--verify", `${opts.base}^{tree}`])).trim()}`,
+        ]
+      : [opts.base];
     const pack = await gitOutput({
       cwd: directory,
       args: ["pack-objects", "--revs", "--stdout", "--quiet"],
-      // The base itself too: a head that left it still needs it as its ref.
-      input: `${[opts.head, opts.base, ...(opts.tree ? [opts.tree] : [])].join("\n")}\n`,
+      // The base itself too: a head that left it still needs it as its
+      // ref. Left out, with everything it reaches, when the receiver
+      // holds it.
+      input: `${[...held, opts.head, ...(opts.tree ? [opts.tree] : [])].join("\n")}\n`,
     });
-    return { pack, shallow: [opts.base] };
+    return { pack, shallow: [opts.base], objects: packObjectCount(pack) };
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
 }
 
+/** How many objects a packfile says it holds (its header's count). */
+function packObjectCount(pack: Uint8Array): number {
+  if (pack.byteLength < 12) return 0;
+  return new DataView(pack.buffer, pack.byteOffset, pack.byteLength).getUint32(
+    8,
+  );
+}
+
 /**
- * Shell that installs a seed pack uploaded as base64 at `packFile` into the
- * repository in the current directory and records `shallow` commits. It
- * leaves refs and the working tree to the caller.
+ * The bytes of a seed pack one uploaded part holds: a multiple of three,
+ * so every part is whole base64 groups and the parts decode joined, and
+ * small enough that a part's operation stays far under what a queue row
+ * can carry (4 MiB of text).
+ */
+const SEED_PART_BYTES = 3 * 1024 * 1024;
+
+/** Digits in a part's number: parts sort by name whatever their count. */
+const SEED_PART_DIGITS = 6;
+
+/**
+ * A seed pack as the files to upload beside each other: base64, in parts
+ * named `<name>.000000`, `<name>.000001`, and so on, which
+ * {@link seedPackInstallScript} reads back in order. One file per upload
+ * keeps every operation small whatever the pack's size, and each part is
+ * encoded on its own, so no string grows with the pack either.
+ */
+export function seedPackParts(opts: {
+  pack: Uint8Array;
+  name: string;
+}): { name: string; content: string }[] {
+  const bytes = Buffer.from(
+    opts.pack.buffer,
+    opts.pack.byteOffset,
+    opts.pack.byteLength,
+  );
+  const parts: { name: string; content: string }[] = [];
+  for (let start = 0; start < bytes.byteLength; start += SEED_PART_BYTES)
+    parts.push({
+      name: `${opts.name}.${String(parts.length).padStart(SEED_PART_DIGITS, "0")}`,
+      content: bytes
+        .subarray(start, start + SEED_PART_BYTES)
+        .toString("base64"),
+    });
+  return parts;
+}
+
+/**
+ * Shell that installs a seed pack uploaded as base64 parts
+ * (`<packFile>.000000`, ...; see {@link seedPackParts}) into the repository
+ * in the current directory and records `shallow` commits. It leaves refs
+ * and the working tree to the caller.
  */
 export function seedPackInstallScript(opts: {
   packFile: string;
@@ -338,9 +402,12 @@ export function seedPackInstallScript(opts: {
     if (!COMMIT.test(commit)) throw new Error("Invalid shallow commit");
   }
   const gitDir = `"$(git rev-parse --git-dir)"`;
+  const parts = `${shellQuote(opts.packFile)}.${"[0-9]".repeat(SEED_PART_DIGITS)}`;
   return [
-    `base64 -d < ${shellQuote(opts.packFile)} | git index-pack --stdin --fix-thin >/dev/null`,
-    `rm -f ${shellQuote(opts.packFile)}`,
+    // Parts sort by name, and each is whole base64 groups, so they decode
+    // as one stream.
+    `cat ${parts} | base64 -d | git index-pack --stdin --fix-thin >/dev/null`,
+    `rm -f ${parts}`,
     ...(opts.shallow.length > 0
       ? [
           `touch ${gitDir}/shallow`,

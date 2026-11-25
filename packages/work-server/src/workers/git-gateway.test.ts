@@ -439,6 +439,7 @@ describe("a pull request review chat with Git through the gateway", () => {
     ).toEqual({ ref: "refs/pull/42/head", commit: pullHead });
 
     // A new push to the pull request, delivered to the same chat.
+    const firstHead = pullHead;
     const nextHead = await commit(
       { "app.ts": "export const one = 2;\n" },
       "Fix app",
@@ -483,6 +484,25 @@ describe("a pull request review chat with Git through the gateway", () => {
     expect(
       await run("git rev-parse HEAD refs/work/base && git status --porcelain"),
     ).toBe(`exit=0\n${nextHead}\n${nextHead}`);
+
+    // Each of those bases was fetched from Work with Git (ADR 0353): the
+    // first head, the push, and the rebuilt workspace, each with a token
+    // that has ended, and nothing of the fetch left but what it fetched.
+    const fetched = await server.catamorphic.core.db
+      .selectFrom("workspace_checkouts")
+      .select(["commit_sha", "revoked_at"])
+      .where("session_id", "=", sessionId)
+      .orderBy("created_at")
+      .execute();
+    expect(fetched.map((row) => row.commit_sha)).toEqual([
+      firstHead,
+      nextHead,
+      nextHead,
+    ]);
+    expect(fetched.every((row) => row.revoked_at !== null)).toBe(true);
+    expect(await run("cut -f1 .git/FETCH_HEAD && git remote")).toBe(
+      `exit=0\n${nextHead}\norigin`,
+    );
   }, 120_000);
 
   it("fetches and pushes work branches with the session grant, and refuses the rest", async () => {

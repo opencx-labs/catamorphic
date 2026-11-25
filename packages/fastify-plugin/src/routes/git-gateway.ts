@@ -1,5 +1,9 @@
 import { Readable } from "node:stream";
-import type { GitGatewayOperation } from "@catamorphic/core";
+import {
+  checkoutTarget,
+  type GitGatewayOperation,
+  type GitGatewayResponse,
+} from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { RouteContext } from "../app.js";
 
@@ -27,7 +31,73 @@ export function registerGitGatewayRoutes(
     git.post("/gateway/git/:alias/*", options, (request, reply) =>
       serve(ctx, request, reply, "POST"),
     );
+    // A workspace's base, served by Work itself (ADR 0353):
+    // `<prefix>/gateway/checkout/<id>/info/refs` and `.../git-upload-pack`,
+    // with the checkout's token as the bearer.
+    git.get("/gateway/checkout/*", options, (request, reply) =>
+      serveCheckout(ctx, request, reply, "GET"),
+    );
+    git.post("/gateway/checkout/*", options, (request, reply) =>
+      serveCheckout(ctx, request, reply, "POST"),
+    );
   });
+}
+
+async function serveCheckout(
+  ctx: RouteContext,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  method: "GET" | "POST",
+): Promise<FastifyReply> {
+  const checkouts = ctx.core?.workspaceCheckouts;
+  if (!checkouts)
+    return reply
+      .status(404)
+      .type("text/plain")
+      .send("This host serves no checkouts\n");
+  const params = request.params as { "*"?: string };
+  const query = request.query as { service?: string };
+  const target = checkoutTarget({
+    method,
+    path: params["*"] ?? "",
+    service: query.service,
+  });
+  if (!target)
+    return reply.status(404).type("text/plain").send("Not a Git request\n");
+  const headers: Record<string, string | undefined> = {};
+  for (const [name, value] of Object.entries(request.headers))
+    headers[name] = Array.isArray(value) ? value.join(", ") : value;
+  return send(
+    reply,
+    method,
+    await checkouts.handle({
+      id: target.id,
+      operation: target.operation,
+      authorization: headers.authorization,
+      headers,
+      ...(method === "POST" ? { body: request.raw } : {}),
+    }),
+  );
+}
+
+/** Send a gateway's answer, streamed. */
+function send(
+  reply: FastifyReply,
+  method: "GET" | "POST",
+  response: GitGatewayResponse,
+): FastifyReply {
+  reply.status(response.status);
+  for (const [name, value] of Object.entries(response.headers))
+    reply.header(name, value);
+  // A refused upload may still be arriving; closing lets the client see
+  // the answer instead of waiting to finish sending.
+  if (method === "POST" && response.status >= 400)
+    reply.header("connection", "close");
+  return reply.send(
+    response.body instanceof Uint8Array
+      ? Buffer.from(response.body)
+      : Readable.from(response.body),
+  );
 }
 
 async function serve(
@@ -52,25 +122,17 @@ async function serve(
   const headers: Record<string, string | undefined> = {};
   for (const [name, value] of Object.entries(request.headers))
     headers[name] = Array.isArray(value) ? value.join(", ") : value;
-  const response = await gateway.handle({
-    alias,
-    repositoryPath: target.repositoryPath,
-    operation: target.operation,
-    authorization: headers.authorization,
-    headers,
-    ...(method === "POST" ? { body: request.raw } : {}),
-  });
-  reply.status(response.status);
-  for (const [name, value] of Object.entries(response.headers))
-    reply.header(name, value);
-  // A refused upload may still be arriving; closing lets the client see
-  // the answer instead of waiting to finish sending.
-  if (method === "POST" && response.status >= 400)
-    reply.header("connection", "close");
-  return reply.send(
-    response.body instanceof Uint8Array
-      ? Buffer.from(response.body)
-      : Readable.from(response.body),
+  return send(
+    reply,
+    method,
+    await gateway.handle({
+      alias,
+      repositoryPath: target.repositoryPath,
+      operation: target.operation,
+      authorization: headers.authorization,
+      headers,
+      ...(method === "POST" ? { body: request.raw } : {}),
+    }),
   );
 }
 

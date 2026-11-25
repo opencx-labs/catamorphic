@@ -1235,6 +1235,16 @@ no deletes) before forwarding with the upstream credential; guards see kind
 401 challenge must leave `/gateway/` answering `WWW-Authenticate: Basic` so
 Git's credential helpers run.
 
+A workspace's base through the gateway (ADR 0353): with `gatewayUrl` set, a
+new sandbox fetches the commit its chat stands on from
+`/gateway/checkout/:id/*` (public route, Git smart HTTP, fetch only; a bearer
+token core issues for one session and one commit and revokes when the checkout
+command ends). The commit is served from the session's copy, so a project
+without a repository is served from Work's own `main`. An Environment's
+`checkout.command` replaces the default fetch. Without `gatewayUrl`, or when a
+sandbox cannot reach it, core uploads the base to the sandbox in parts; an
+Environment that names a checkout command needs the gateway.
+
 Models through the gateway (ADR 0180): a provider whose connection is a model
 key sets `model: { api, baseUrl, headers({ material }) }`
 (`defineModelConnectionProvider` from `@catamorphic/server-sdk`, `api`

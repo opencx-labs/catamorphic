@@ -105,6 +105,13 @@ export type {
   StorageBackend,
 } from "./types.js";
 export {
+  advertiseCheckout,
+  CHECKOUT_BRANCH,
+  type CheckoutSource,
+  openCheckoutSource,
+  serveCheckout,
+} from "./workspace-checkout.js";
+export {
   type BaseMoveOutcome,
   buildSeedPack,
   copyFromMirror,
@@ -114,6 +121,7 @@ export {
   moveCheckoutBase,
   parseWorkspaceRef,
   seedPackInstallScript,
+  seedPackParts,
   shellQuote,
   unpinMirrorRef,
   type WorkspaceBase,

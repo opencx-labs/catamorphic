@@ -36,7 +36,9 @@ import { ProjectEnvironmentsService } from "../services/project-environments-ser
 import { ProjectsService } from "../services/projects-service.js";
 import { SecretsService } from "../services/secrets-service.js";
 import { SessionWorkspaces } from "../services/session-workspaces.js";
+import { WorkspaceCheckoutsService } from "../services/workspace-checkouts.js";
 import { RecordingAdapter } from "./recording-adapter.js";
+import { startCheckoutGateway } from "./test-checkout-gateway.js";
 
 const ownedSandboxes = new TestSandboxes();
 
@@ -99,6 +101,7 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
   let projectManager: ProjectManager;
   let sessions: AgentSessionsService;
   let machine: LocalProcessSandboxProvider;
+  let gateway: Awaited<ReturnType<typeof startCheckoutGateway>>;
   const allocations = new ExecutionAllocationsService(db);
   /** What the agent found in its project folder, turn by turn. */
   const found: string[] = [];
@@ -294,6 +297,26 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
       topology: "controller",
       connectionRequirements: ["logs"],
     };
+    // Each checkout's start and end is written beside the switches, so
+    // the order they happen in shows.
+    const serving = new WorkspaceCheckoutsService(db, { projectManager });
+    const checkouts = new Proxy(serving, {
+      get(target, property) {
+        if (property === "issue")
+          return async (args: Parameters<typeof serving.issue>[0]) => {
+            await fs.appendFile(runs, "checkout open\n");
+            return target.issue(args);
+          };
+        if (property === "revoke")
+          return async (args: Parameters<typeof serving.revoke>[0]) => {
+            await target.revoke(args);
+            await fs.appendFile(runs, "checkout ended\n");
+          };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    gateway = await startCheckoutGateway(() => serving);
     sessions = new AgentSessionsService(db, {
       hostId: "setup-network-host",
       projectManager,
@@ -323,8 +346,11 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
       ),
       connectionGrants: new ConnectionCapabilityGrantsService(db, allocations),
       connectionMcpUrl: () => "http://work.acme.test/mcp",
+      // The base is fetched from Work itself, through a gateway the
+      // sandbox really reaches (ADR 0353).
+      checkouts,
       sandboxGateway: {
-        url: () => "http://work.acme.test/gateway",
+        url: () => gateway.url,
         remoteBaseUrls: () => undefined,
         modelApi: () => undefined,
         servesHttp: () => true,
@@ -338,6 +364,7 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
       [
         () => sessions?.stopLocalTurns(),
         () => ownedSandboxes.cleanup(),
+        () => gateway?.close(),
         () => db.destroy(),
       ],
       () => fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5 }),
@@ -349,9 +376,13 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
       workspace: { ref: "main" },
     });
     await send(chat.id, "review");
-    // Widened to the setup's hosts alone (not the gateway), with nothing
+    // The base is fetched while the sandbox reaches only the gateway, and
+    // its checkout has ended before the network changes (ADR 0353). Then
+    // widened to the setup's hosts alone (not the gateway), with nothing
     // but the base checkout and the one secret it names.
     expect(await ranLines()).toEqual([
+      "checkout open",
+      "checkout ended",
       "widen registry.npmjs.org",
       "setup v1: rows=no grants=0 env=0 http=0 token=setup-token-value other=none base=main",
       "narrow",
@@ -368,7 +399,7 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
 
     // A later turn in the same sandbox: narrowed first, nothing widens.
     await send(chat.id, "again");
-    expect((await ranLines()).slice(3)).toEqual(["narrow"]);
+    expect((await ranLines()).slice(5)).toEqual(["narrow"]);
     expect(found.at(-1)).toBe("prod-rows logs");
   }, 60_000);
 
@@ -391,7 +422,9 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
     });
     await send(chat.id, "after idle");
     expect(await sandboxOf(chat.id)).not.toBe(first);
-    expect((await ranLines()).slice(3)).toEqual([
+    expect((await ranLines()).slice(5)).toEqual([
+      "checkout open",
+      "checkout ended",
       "widen registry.npmjs.org",
       "setup v1: rows=no grants=0 env=0 http=0 token=setup-token-value other=none base=main",
       "narrow",
@@ -420,12 +453,16 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
     await fs.rm(flag);
     await send(chat.id, "fixed");
     expect(await sandboxOf(chat.id)).not.toBe(second);
-    expect((await ranLines()).slice(3)).toEqual([
+    expect((await ranLines()).slice(5)).toEqual([
       "narrow",
+      "checkout open",
+      "checkout ended",
       "widen registry.npmjs.org",
       "setup v2: rows=no grants=0 env=0 http=0 token=setup-token-value other=none base=main",
       "narrow",
       "narrow",
+      "checkout open",
+      "checkout ended",
       "widen registry.npmjs.org",
       "setup v2: rows=no grants=0 env=0 http=0 token=setup-token-value other=none base=main",
       "narrow",
@@ -453,7 +490,9 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
           .executeTakeFirstOrThrow()
       ).workspace,
     ).toMatchObject({ ref: "main" });
-    expect((await ranLines()).slice(3)).toEqual([
+    expect((await ranLines()).slice(5)).toEqual([
+      "checkout open",
+      "checkout ended",
       "widen registry.npmjs.org",
       "setup v3: rows=no grants=0 env=0 http=0 token=setup-token-value other=none base=main",
       "narrow",
@@ -482,7 +521,9 @@ describe("a setup on its own network, end to end (ADR 0257)", () => {
     await machine.destroySandbox(first);
     await send(chat.id, "after the stop");
     expect(await sandboxOf(chat.id)).not.toBe(first);
-    expect((await ranLines()).slice(3)).toEqual([
+    expect((await ranLines()).slice(5)).toEqual([
+      "checkout open",
+      "checkout ended",
       "widen registry.npmjs.org",
       "setup v3: rows=no grants=0 env=0 http=0 token=setup-token-value other=none base=main",
       "narrow",
