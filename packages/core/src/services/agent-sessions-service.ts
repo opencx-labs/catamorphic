@@ -8733,18 +8733,32 @@ export class AgentSessionsService {
       ttlSeconds: timeoutSeconds + 60,
     });
     try {
-      await checkoutSandboxBase({
-        provider: input.provider,
-        sandboxId: input.sandboxProviderId,
-        projectDir: this.projectDir(input.provider),
-        base: input.base,
-        checkout: {
-          url: `${gateway}/${issued.id}`,
-          token: issued.token,
-          command: input.checkout?.command ?? DEFAULT_CHECKOUT_COMMAND,
-          timeoutSeconds,
+      await withSpan(
+        {
+          tracer,
+          name: "agent.session.workspace.checkout",
+          attributes: {
+            "catamorphic.tenant.id": input.tenantId,
+            "catamorphic.project.id": input.projectId,
+            "catamorphic.agent.session.id": input.sessionId,
+            // Whether the Environment names the command, or Work's runs.
+            "catamorphic.workspace.checkout.named": Boolean(input.checkout),
+          },
         },
-      });
+        () =>
+          checkoutSandboxBase({
+            provider: input.provider,
+            sandboxId: input.sandboxProviderId,
+            projectDir: this.projectDir(input.provider),
+            base: input.base,
+            checkout: {
+              url: `${gateway}/${issued.id}`,
+              token: issued.token,
+              command: input.checkout?.command ?? DEFAULT_CHECKOUT_COMMAND,
+              timeoutSeconds,
+            },
+          }),
+      );
       return true;
     } catch (error) {
       if (input.checkout) throw error;

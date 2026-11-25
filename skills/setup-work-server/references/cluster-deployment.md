@@ -800,6 +800,10 @@ caches (ADR 0208):
   workspace rebuilt after idle release, and when the base moves, where Git
   sends only what the checkout lacks. The chat's own commits and uncommitted
   files come back on top of it afterwards. Keep `.work` in a sparse cone.
+  The image's Git must be 2.31 or newer, which reads the token from the
+  command's environment. A sandbox that cannot fetch (an older Git, a
+  gateway it does not reach) gets its base uploaded instead when the
+  Environment names no command, and the server's log says why.
 - `setup.command` is a shell command run in the project folder of every
   new workspace before its first turn, once the chat's secrets and the
   member's personal files are in place, again when the command changes,

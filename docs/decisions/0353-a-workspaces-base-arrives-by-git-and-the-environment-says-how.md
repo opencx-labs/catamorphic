@@ -104,7 +104,8 @@ reachable).
 - A sandbox briefly holds a token that reads its own base. It can read nothing
   the sandbox is not about to be given, and it has ended before setup, before
   a setup's network, and before the agent.
-- Git checkout needs a sandbox that reaches the gateway; hosts that mount the
+- Git checkout needs a sandbox that reaches the gateway and a Git that reads
+  configuration from its environment (2.31 or newer); hosts that mount the
   gateway routes serve checkouts with nothing more to configure.
 - Follow-up: cache fills fetching by Git, which needs a fill sandbox that
   starts narrow and widens for its command.
