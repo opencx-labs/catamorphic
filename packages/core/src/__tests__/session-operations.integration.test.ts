@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { EchoAdapter } from "@catamorphic/agent-runner";
-import { type DB, migrateToLatest } from "@catamorphic/db";
+import { type DB, type Json, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
@@ -16,6 +16,7 @@ import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
 } from "../services/agent-sessions-service.js";
+import { projectChatIdentity } from "../services/chat-delivery.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -32,6 +33,7 @@ import {
   type SessionState,
   SessionStateSchema,
 } from "../services/session-state.js";
+import { requestFromRow } from "../services/sessions/session-rows.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -74,6 +76,10 @@ describe("session operations", () => {
   let operations: SessionOperationsService;
   let projectId: string;
   const settled: AgentTurnSettledEvent[] = [];
+  /** Whether a project automation is bound to request events (ADR 0352). */
+  let listening = false;
+  /** The events it was asked about, as a bound workflow would receive them. */
+  const heard: Json[] = [];
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
@@ -117,6 +123,10 @@ describe("session operations", () => {
       },
       onTurnSettled: (event) => {
         settled.push(event);
+      },
+      requestListeners: async ({ event }) => {
+        heard.push(event);
+        return listening;
       },
       sessionUrl: ({ sessionId }) =>
         `https://work.example/?session=${sessionId}`,
@@ -410,6 +420,129 @@ describe("session operations", () => {
         ).transcript,
       ),
     ).toContain("Allowed query.");
+  }, 60_000);
+
+  it("holds an unattended chat's approval for the project's automations, which alone answer it (ADR 0352)", async () => {
+    const project = projectChatIdentity({
+      tenantId: identity.tenantId,
+      projectId,
+    });
+    const workflow = {
+      kind: "workflow" as const,
+      runId: randomUUID(),
+      workflowName: "answerRequests",
+    };
+    /** One operation as a project automation's run makes it. */
+    const asProject = (
+      operation: SessionOperationName,
+      args: Record<string, unknown>,
+    ) =>
+      operations.execute({
+        identity: project,
+        projectId,
+        operation,
+        args,
+        author: workflow,
+      });
+    const ask = async () =>
+      SESSION_OPERATIONS.session_start.output.parse(
+        await asProject("session_start", {
+          message: "[[approve prod query]] Done",
+          agent: "guarded",
+          idempotencyKey: randomUUID(),
+        }),
+      ) as SessionState;
+    const transcript = async (sessionId: string) =>
+      JSON.stringify(
+        (await run("session_read", { sessionId, include: ["transcript"] }))
+          .transcript,
+      );
+    const recorded = (sessionId: string) =>
+      db
+        .selectFrom("project_events")
+        .select("payload")
+        .where("project_id", "=", projectId)
+        .where("kind", "=", "session.request-opened")
+        .where(sql<boolean>`payload ->> 'sessionId' = ${sessionId}`)
+        .execute();
+
+    // No automation listens and no one watches: refused at once, with no
+    // event of a request nobody could answer.
+    listening = false;
+    const refused = await settle(await ask());
+    expect(refused).toMatchObject({ state: "idle", requests: [] });
+    expect(await transcript(refused.sessionId)).toContain(
+      "no one watches this chat",
+    );
+    expect(await recorded(refused.sessionId)).toEqual([]);
+
+    // One listens: the approval waits for it, two minutes, as a session
+    // event with the request in its detail.
+    listening = true;
+    const asked = await settle(await ask());
+    expect(asked).toMatchObject({
+      state: "needs_input",
+      requests: [{ kind: "approval", blocking: true }],
+    });
+    const requestId = asked.requests[0]?.requestId;
+    const pending = requestFromRow(
+      await db
+        .selectFrom("agent_runtime_requests")
+        .selectAll()
+        .where("request_id", "=", requestId ?? "")
+        .executeTakeFirstOrThrow(),
+    );
+    expect(pending.approvers).toEqual([]);
+    expect(
+      Math.round(
+        (Date.parse(pending.expiresAt ?? "") - Date.parse(pending.createdAt)) /
+          60_000,
+      ),
+    ).toBe(2);
+    const events = await recorded(asked.sessionId);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({
+      sessionId: asked.sessionId,
+      agentId: "guarded",
+      session: { id: asked.sessionId, status: "active" },
+      detail: {
+        requestId,
+        kind: "approval",
+        blocking: true,
+        approval: { tool: { server: "prod", name: "query" } },
+      },
+    });
+    // The listener was asked about the event a bound workflow receives.
+    expect(heard.at(-1)).toMatchObject({
+      source: "session",
+      kind: "session.request-opened",
+      projectId,
+      payload: { sessionId: asked.sessionId, detail: { kind: "approval" } },
+    });
+
+    const answer = (decision: "approved" | "denied") => ({
+      sessionId: asked.sessionId,
+      requestId,
+      response: { kind: "approval", decision },
+      idempotencyKey: randomUUID(),
+    });
+    // A member who may continue the chat is not who approves for it.
+    expect(
+      await run("session_answer", answer("approved")).catch(
+        sessionOperationError,
+      ),
+    ).toMatchObject({ code: "not_authorized" });
+    expect(
+      (await run("session_read", { sessionId: asked.sessionId })).state,
+    ).toBe("needs_input");
+    // The project's own automation is, and the agent goes on.
+    await asProject("session_answer", answer("approved"));
+    const done = await settle(
+      await run("session_read", { sessionId: asked.sessionId }),
+    );
+    expect(done.state).toBe("idle");
+    expect(await transcript(asked.sessionId)).toContain("Allowed query.");
+    listening = false;
   }, 60_000);
 
   it("sends, interrupts and closes with keys that make retries safe", async () => {

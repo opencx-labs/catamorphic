@@ -4,6 +4,7 @@ import { createAiSdkAdapter } from "@catamorphic/ai-sdk";
 import {
   type AgentDefinition,
   type AgentHarness,
+  acpToolTimeoutMs,
   type CodingAgentRegistry,
   normalizeConnectionRequirement,
   type RegisteredCodingAgent,
@@ -277,6 +278,10 @@ function sandboxProjectAgent(input: {
   const common = {
     id: input.id,
     ...harness,
+    // Its client gives a tool call up after its own timeout (ADR 0351).
+    ...(definition.kind === "acp"
+      ? { toolTimeoutMs: acpToolTimeoutMs(definition.acp) }
+      : {}),
     topology: "controller" as const,
     sandboxing: definition.sandboxing ?? "propose",
     environment: definition.environment,

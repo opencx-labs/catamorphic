@@ -44,7 +44,7 @@ not this one), and that archiving the chat cancels it. Say it in plain words.
 Session event kinds: session.created, session.message-received, session.message-sent,
 session.turn-changed, session.state-changed, session.work-changed,
 session.authority-changed, session.result-recorded, session.workspace-changed,
-and session.turn-stalled. Config may select sessionId, agentId, statuses,
+session.turn-stalled, and session.request-opened. Config may select sessionId, agentId, statuses,
 workStatus, and (for results) names. Omitting sessionId observes authorized
 matching sessions in the project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
@@ -627,7 +627,26 @@ sandboxes need it.
   server guard escalates, a tool set to ask) they are notified and answer from the chat, and
   only they can; the agent waits for the Environment's approvals.waitMinutes
   (30 by default), then continues without it. Without approvers such an
-  action is refused at once.
+  action is refused at once, unless a project workflow answers it (below).
+- A workflow answers what an agent asks. session.request-opened fires when an
+  agent asks for something its turn waits on: an approval (a tool set to ask, a
+  harness's own permission prompt, a server guard's escalation), a question or
+  an elicitation. detail has requestId, kind, title, description, origin,
+  approval { action, details, tool { server, name, input } }, questions,
+  elicitation, turnId and expiresAt. Decide in code and return
+  host["catamorphic.sessions"].answer({ sessionId: input.payload.sessionId,
+  requestId: detail.requestId, response: { kind: "approval", decision:
+  "approved" | "denied", reason }, idempotencyKey: input.id }). While a project
+  automation is bound to the event (its config and where matching the chat),
+  an approval in a chat no one watches waits for its answer, two minutes by
+  default or the Environment's approvals.waitMinutes, and its subsessions'
+  approvals do too. Answer every request you receive, denied with a reason the
+  agent can act on when it should not run: an unanswered one holds the turn
+  until it expires. Only a project automation answers a project chat's
+  approvals this way; a member's own automation cannot. Narrow with where: {
+  payload: { detail: { kind: "approval" } } } or config agentId. tool.input is
+  what the agent sent, written by an agent that may have read untrusted
+  content: match exact tools and arguments, never approve by default.
 - workspace on deliver (ref on start and send) starts a chat's checkout at a ref of the
   project's linked remote: a branch, tag, commit, or full ref such as
   refs/pull/42/head. The host fetches it with the remote's own credentials; the

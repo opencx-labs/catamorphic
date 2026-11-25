@@ -161,6 +161,13 @@ export interface RegisteredCodingAgent {
    */
   stall?: { minutes: number };
   /**
+   * How long the harness's own client waits for a tool call's answer
+   * before it gives the call up (an MCP client's request timeout), in
+   * milliseconds. Work ends every wait in its tools before then (ADR
+   * 0351). Absent: the harness waits as long as a tool takes.
+   */
+  toolTimeoutMs?: number;
+  /**
    * Why the agent cannot run now (a definition to fix, an approval to
    * give). Its turns fail with this reason before binding a native
    * thread (ADR 0276).

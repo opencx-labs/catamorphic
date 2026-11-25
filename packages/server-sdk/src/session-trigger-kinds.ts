@@ -58,6 +58,9 @@ export const SESSION_TRIGGER_KINDS = [
   // A running turn made no progress for its agent's stall threshold
   // (ADR 0333); `detail` names the turn, attempt and what it last reported.
   "session.turn-stalled",
+  // An agent asked for something its turn waits on (ADR 0352): an
+  // approval, a question or an elicitation, in `detail`.
+  "session.request-opened",
 ].map((name) =>
   defineTriggerKind({
     name,
@@ -71,7 +74,9 @@ export const SESSION_TRIGGER_KINDS = [
         ? 'An agent\'s accepted typed result, the moment it is recorded (mid-turn). The result is in input.payload.detail (name, value, turnId, input, commit); select names in config, a session or agent, or keyed chats with where on payload.session.key. A newer input to the chat makes it stale: check detail.input against catamorphic.sessions.read with include: ["results"].'
         : name === "session.turn-stalled"
           ? "A running turn made no progress for its agent's stall threshold (the definition's stall.minutes), recorded once per silence. input.payload.detail has turnId, attemptId, attempt, attempts, restarts, progressAt, stalledAt, stallMinutes and activity (tool calls and commands still running). Work does nothing on its own: read the chat, collect diagnostics with exec, and restart with catamorphic.sessions.restart, bounding it with restarts."
-          : "A durable session transition. Select a session or agent in config, or keyed chats with where on payload.session.key (a { $prefix } matches a key namespace); inspect event-time state in input.payload and read current state with catamorphic.sessions.read. Turn completion does not mean work completion.",
+          : name === "session.request-opened"
+            ? "An agent asked for something its turn waits on: an approval (a tool set to ask, a harness permission, a guard's escalation), a question or an elicitation. input.payload.detail has requestId, kind, title, description, origin, approval { action, details, tool { server, name, input } }, questions, elicitation, turnId and expiresAt. Answer with catamorphic.sessions.answer({ sessionId, requestId, response, idempotencyKey }); narrow with where on payload.detail.kind or payload.agentId. While a project automation listens, an approval in a chat no one watches waits for its answer (two minutes by default) instead of being refused at once, so answer every one you receive: denied with a reason when it should not run."
+            : "A durable session transition. Select a session or agent in config, or keyed chats with where on payload.session.key (a { $prefix } matches a key namespace); inspect event-time state in input.payload and read current state with catamorphic.sessions.read. Turn completion does not mean work completion.",
     payload: sessionEventPayload,
     config,
     deliveryKey: (event) => event.id,

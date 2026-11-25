@@ -2,6 +2,13 @@
 export const STOPPED_WAITING_NOTE =
   "Work ended any wait here early because something reached you in this chat (a message or a task's notification, which follows this result) or your turn is stopping. Wait again afterwards if you still need to.";
 
+/**
+ * What a tool's result says when a wait in it was ended because the
+ * agent's own client would have given the call up (its tool timeout).
+ */
+export const ANSWERED_IN_TIME_NOTE =
+  "Work ended any wait in this call early, before your client would have stopped waiting for its answer. What it returned stands; wait again if you still need to.";
+
 /** How a {@link waitUntil} ended. */
 export type WaitOutcome = "ready" | "timeout" | "stopped";
 

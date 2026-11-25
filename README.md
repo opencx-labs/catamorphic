@@ -321,6 +321,12 @@ and the project MCP) can `restart` the turn: its attempt is killed and the same
 turn runs again, while each unfinished attempt keeps the masked tail of its
 runner's and harness's own output (ADR
 [0333](docs/decisions/0333-stalled-turns-are-visible-and-restartable.md)).
+Whatever an agent's turn waits on (an approval, a question, an elicitation) is
+a session event too, `session.request-opened`, which a workflow answers with
+`sessions.answer`; while a project automation is bound to it, an approval in a
+chat no one watches waits for that answer instead of being refused at once
+(ADR
+[0352](docs/decisions/0352-an-opened-request-is-a-session-event-automations-answer-unattended-approvals.md)).
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.

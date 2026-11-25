@@ -28,6 +28,8 @@ import type {
   AgentHarness as RegisteredHarness,
 } from "@catamorphic/core";
 import {
+  ACP_TOOL_TIMEOUT_SECONDS,
+  acpToolTimeoutMs,
   connectionMcpServerName,
   definitionHash,
   projectAgentId,
@@ -129,7 +131,7 @@ type HostHarness = Extract<RegisteredHarness, { placement: "host" }>;
 /** What one agent config builds: its harness and per-attempt settings. */
 type BuiltAgent = Pick<
   RegisteredCodingAgent,
-  "options" | "defaults" | "retryFailure"
+  "options" | "defaults" | "retryFailure" | "toolTimeoutMs"
 > & {
   harness: HostHarness;
 };
@@ -1052,6 +1054,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return {
       id,
       ...built,
+      // What its definition says its client waits for a tool (ADR 0351).
+      ...(def.kind === "acp"
+        ? { toolTimeoutMs: acpToolTimeoutMs(def.acp) }
+        : {}),
       topology: "native",
       sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
       ...(def.environment ? { environment: def.environment } : {}),
@@ -1166,6 +1172,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         },
         options: { command },
         defaults: {},
+        // Its client gives a tool call up after its own timeout (ADR 0351).
+        toolTimeoutMs: ACP_TOOL_TIMEOUT_SECONDS * 1000,
       };
     }
 

@@ -83,6 +83,7 @@ export {
 } from "./services/agent-capabilities-service.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
+  ACP_TOOL_TIMEOUT_SECONDS,
   AGENT_COORDINATION_STRATEGIES,
   AGENT_DEFINITION_KINDS,
   type AgentCoordinationStrategy,
@@ -97,6 +98,7 @@ export {
   type AgentDelegationPolicy,
   AgentDelegationPolicySchema,
   type AgentEnvironmentPolicy,
+  acpToolTimeoutMs,
   agentDefinitionSchema,
   definitionHash,
   formatProjectAgentId,

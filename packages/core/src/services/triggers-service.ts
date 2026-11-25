@@ -22,7 +22,7 @@ import {
   PROJECT_CHECK_SCRIPT_PATH,
   PROJECT_WORKFLOWS_PACKAGE_PATH,
 } from "@catamorphic/workflow/project-layout";
-import type { Kysely } from "kysely";
+import type { Kysely, Transaction } from "kysely";
 import {
   hasProjectPermission,
   type Identity,
@@ -572,6 +572,58 @@ export class TriggersService {
       environment: row.environment_name,
       ...bindingFromRow(row),
     }));
+  }
+
+  /**
+   * Whether an active project automation subscribes to `kind` for this
+   * payload (ADR 0352): its trigger's config and `where` matched as a
+   * dispatch matches them. A member's own automation does not count: it
+   * acts for one person, never for the project. Read with `executor`, so
+   * a caller inside a transaction asks through it.
+   */
+  async projectListens(args: {
+    executor?: Kysely<DB> | Transaction<DB>;
+    projectId: string;
+    kind: string;
+    payload: Json;
+  }): Promise<boolean> {
+    const kind = this.registry.get(args.kind);
+    if (!kind) return false;
+    const rows = await (args.executor ?? this.db)
+      .selectFrom("workflow_enablement_triggers as activation")
+      .innerJoin(
+        "workflow_enablements as enablement",
+        "enablement.id",
+        "activation.enablement_id",
+      )
+      .innerJoin(
+        "trigger_definitions as definition",
+        "definition.id",
+        "activation.trigger_definition_id",
+      )
+      .select(["definition.config", "definition.where_filters"])
+      .where("definition.project_id", "=", args.projectId)
+      .where("definition.trigger_kind", "=", kind.name)
+      .where("activation.status", "=", "active")
+      .where("enablement.status", "=", "active")
+      .where("enablement.owner_kind", "=", "project")
+      .where(({ or, eb }) =>
+        or([
+          eb("enablement.expires_at", "is", null),
+          eb("enablement.expires_at", ">", new Date()),
+        ]),
+      )
+      .execute();
+    // As stored, with U+FFFD for half an emoji or a NUL, like a dispatch.
+    const payload = storedJson(args.payload);
+    return rows.some(
+      (row) =>
+        (kind.matches?.({ config: row.config ?? {}, payload }) ?? true) &&
+        matchesAllWhere(
+          Array.isArray(row.where_filters) ? row.where_filters : [],
+          payload,
+        ),
+    );
   }
 
   /**

@@ -51,6 +51,14 @@ import {
 import { buildContextHandoff } from "./context-handoff.js";
 import { NativeStateStore } from "./native-state.js";
 import {
+  type RequestEventSession,
+  type RequestListeners,
+  recordRequestsOpened,
+  requestEventInput,
+  requestEventSession,
+  requestOpenedEvent,
+} from "./request-events.js";
+import {
   type ApprovalPolicy,
   approvalPolicy,
   governApproval,
@@ -220,6 +228,8 @@ export interface TurnEngineHost {
     attempt: Attempt;
     name: string;
     input: JsonValue;
+    /** When this host read the call: what its answer is timed from. */
+    readAt: number;
     /** Fires when the agent should stop waiting (ADR 0264). */
     stopWaiting: AbortSignal;
   }): Promise<HostToolResult>;
@@ -274,6 +284,11 @@ export interface TurnEngineHost {
     turn: Turn;
     requests: RuntimeRequest[];
   }): Promise<void>;
+  /**
+   * Whether a project automation listens for a request that opens (ADR
+   * 0352): an unattended chat's approval then waits for it.
+   */
+  requestListeners?: RequestListeners;
   /**
    * A failed attempt nothing ran in, whose failure the engine does not
    * retry by itself: whether the host knows it is passing and asks for one
@@ -2727,8 +2742,29 @@ export class TurnEngine {
         extra.push({ type: "attempt.changed", attempt });
       }
       // Approvals open under their chat's policy (ADR 0176): its approvers
-      // and wait, or a refusal at once when no one can answer.
+      // and wait, or a refusal at once when no one can answer. A project
+      // automation that listens for the request is someone who can (ADR
+      // 0352).
       const governed: SessionEvent[] = [];
+      let chat: RequestEventSession | undefined;
+      const listens = async (request: RuntimeRequest) => {
+        const listeners = this.deps.host.requestListeners;
+        if (!listeners) return false;
+        chat ??= await requestEventSession(trx, input.turn.sessionId);
+        // A listener that cannot say is one that does not listen: the
+        // approval is refused as before, and the turn's frames still land.
+        return listeners({
+          executor: trx,
+          projectId: chat.projectId,
+          event: requestEventInput(requestOpenedEvent(chat, request)),
+        }).catch((error: unknown) => {
+          console.warn(
+            "[catamorphic] Could not ask who listens for a request",
+            error,
+          );
+          return false;
+        });
+      };
       for (const event of ingested.events) {
         if (
           event.type !== "request.changed" ||
@@ -2744,6 +2780,7 @@ export class TurnEngine {
           request: event.request,
           policy,
           now: Date.now(),
+          automated: policy.unattended && (await listens(event.request)),
         });
         governed.push({ type: "request.changed", request: outcome.request });
         if (outcome.refusal && event.request.runnerKey) {
@@ -2764,6 +2801,7 @@ export class TurnEngine {
           });
         }
       }
+      const openedHere: RuntimeRequest[] = [];
       for (const event of governed)
         if (
           event.type === "request.changed" &&
@@ -2772,7 +2810,17 @@ export class TurnEngine {
           event.request.blocking &&
           !refusedIds.has(event.request.id)
         )
-          opened.push(event.request);
+          openedHere.push(event.request);
+      opened.push(...openedHere);
+      // Each is a session event, recorded with it (ADR 0352).
+      if (openedHere.length > 0) {
+        chat ??= await requestEventSession(trx, input.turn.sessionId);
+        const session = chat;
+        await recordRequestsOpened(
+          trx,
+          openedHere.map((request) => requestOpenedEvent(session, request)),
+        );
+      }
       // A refusal at once may leave nothing to wait on: the turn works on.
       if (refused && turn.status === "waiting") {
         const batch = governed.flatMap((event) =>
@@ -2954,6 +3002,9 @@ export class TurnEngine {
      */
     refusal: string | undefined,
   ): Promise<void> {
+    // One read brought these calls: each is answered in turn, and a wait in
+    // any of them ends by what the agent's client allows from here.
+    const readAt = Date.now();
     for (const [callId, call] of calls) {
       if (local.abort.signal.aborted) return;
       const threadId = await this.threadForCall(ctx.attempt, call);
@@ -3018,6 +3069,7 @@ export class TurnEngine {
             attempt: ctx.attempt,
             name: call.name,
             input: call.input,
+            readAt,
             stopWaiting: AbortSignal.any([
               local.abort.signal,
               local.waits.signal,

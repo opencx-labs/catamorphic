@@ -79,6 +79,77 @@ describe("session workflow trigger contracts", () => {
       kind?.matches?.({ config: { workStatus: "completed" }, payload }),
     ).toBe(false);
   });
+  it("takes a request that opened as core records it, selected by agent (ADR 0352)", () => {
+    const kind = SESSION_TRIGGER_KINDS.find(
+      (entry) => entry.name === "session.request-opened",
+    );
+    // The envelope core builds for the event (`requestEventInput`): the
+    // same one it matches a listening automation against before the
+    // database has given the event its sequence.
+    const payload = {
+      id: "0b6f6a43-1a41-4b62-8f55-6f3c2f7f8d10",
+      sequence: 0,
+      projectId: "p",
+      source: "session",
+      kind: "session.request-opened",
+      externalId: "2f0c8f2e-3c58-4f39-9a55-0b7d7b2a8f11",
+      occurredAt: "2026-11-25T10:00:00.000Z",
+      receivedAt: "2026-11-25T10:00:00.000Z",
+      payload: {
+        sessionId: "s",
+        agentId: "project:p:reviewer",
+        externalUserId: "catamorphic:project",
+        session: {
+          id: "s",
+          key: null,
+          title: "Review #42",
+          status: "active",
+          workStatus: "open",
+          activity: null,
+          parentSessionId: "parent",
+          stateRevision: 3,
+          authorityHostId: "h",
+          authorityRevision: 1,
+        },
+        actor: { kind: "system", code: "session.request-opened" },
+        causation: [],
+        detail: {
+          requestId: "r",
+          kind: "approval",
+          blocking: true,
+          title: "Allow post?",
+          description: null,
+          origin: { kind: "mcp", id: "connection_github" },
+          approval: {
+            action: "connection_github · post",
+            tool: {
+              server: "connection_github",
+              name: "post",
+              input: { path: "/repos/acme/web/issues" },
+            },
+          },
+          questions: null,
+          elicitation: null,
+          turnId: "t",
+          attemptId: "a",
+          expiresAt: null,
+        },
+      },
+    };
+    expect(kind?.modes).toEqual(["async"]);
+    expect(kind?.validatePayload(payload)).toEqual({ ok: true });
+    expect(kind?.matches?.({ config: {}, payload })).toBe(true);
+    expect(
+      kind?.matches?.({ config: { agentId: "project:p:reviewer" }, payload }),
+    ).toBe(true);
+    expect(
+      kind?.matches?.({ config: { agentId: "project:p:auditor" }, payload }),
+    ).toBe(false);
+    expect(kind?.matches?.({ config: { sessionId: "other" }, payload })).toBe(
+      false,
+    );
+  });
+
   it("selects recorded results by name", () => {
     const kind = SESSION_TRIGGER_KINDS.find(
       (entry) => entry.name === "session.result-recorded",

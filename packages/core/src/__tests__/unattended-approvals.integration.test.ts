@@ -1,12 +1,14 @@
 import crypto, { randomUUID } from "node:crypto";
 import type { RuntimeRequest } from "@catamorphic/agent-protocol";
-import { createDatabase, migrateToLatest } from "@catamorphic/db";
+import { createDatabase, type Json, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import type { SandboxProvider } from "@catamorphic/sandbox";
+import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
+import { projectChatIdentity } from "../services/chat-delivery.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -50,6 +52,8 @@ const unusedSandbox = new Proxy(
   },
 );
 let sessions: AgentSessionsService;
+/** Whether a project automation is bound to a chat's request events. */
+let listening: (event: Json) => boolean = () => false;
 
 async function chat(input: {
   owner: string;
@@ -174,6 +178,7 @@ describeIf("unattended approvals (ADR 0176)", () => {
         get: () => undefined,
         list: () => [],
       },
+      requestListeners: async ({ event }) => listening(event),
     });
   });
 
@@ -268,6 +273,144 @@ describeIf("unattended approvals (ADR 0176)", () => {
         .where("session_id", "=", sessionId)
         .execute(),
     ).toEqual([]);
+  });
+
+  it("holds a project chat's ask for a project automation that listens, and only the project answers (ADR 0352)", async () => {
+    const sessionId = await chat({ owner: PROJECT_PRINCIPAL_ID });
+    const heard: Json[] = [];
+    listening = (event) => {
+      heard.push(event);
+      return true;
+    };
+    try {
+      const decision = sessions.askApproval({ ...ask, sessionId });
+      const pending = await pendingFor(sessionId);
+      // No person approves here; it waits two minutes, not thirty.
+      expect(pending.approvers).toEqual([]);
+      expect(
+        Date.parse(pending.expiresAt ?? "") - Date.parse(pending.createdAt),
+      ).toBe(2 * 60_000);
+      // The automation was asked about the event a bound workflow receives,
+      // and that event was recorded with the request.
+      expect(heard).toEqual([
+        expect.objectContaining({
+          source: "session",
+          kind: "session.request-opened",
+          projectId,
+          payload: expect.objectContaining({
+            sessionId,
+            detail: expect.objectContaining({
+              requestId: pending.id,
+              kind: "approval",
+              approval: ask.approval,
+            }),
+          }),
+        }),
+      ]);
+      const events = await db
+        .selectFrom("project_events")
+        .select(["source", "payload"])
+        .where("project_id", "=", projectId)
+        .where("kind", "=", "session.request-opened")
+        .where(sql<boolean>`payload ->> 'sessionId' = ${sessionId}`)
+        .execute();
+      expect(events).toEqual([
+        {
+          source: "session",
+          payload: expect.objectContaining({
+            detail: expect.objectContaining({
+              requestId: pending.id,
+              expiresAt: pending.expiresAt,
+            }),
+          }),
+        },
+      ]);
+      // Nobody is notified: no person approves for this chat.
+      expect(
+        await db
+          .selectFrom("user_notification_events")
+          .select("id")
+          .where("session_id", "=", sessionId)
+          .execute(),
+      ).toEqual([]);
+
+      // Reaching the chat is not approving for it: only the project's own
+      // automations answer.
+      await expect(
+        answer({
+          identity: { tenantId, externalUserId: "dave" },
+          sessionId,
+          request: pending,
+          decision: "approved",
+        }),
+      ).rejects.toBeInstanceOf(AccessDeniedError);
+      await expect(
+        answer({
+          identity: member("bob"),
+          sessionId,
+          request: pending,
+          decision: "approved",
+        }),
+      ).rejects.toBeInstanceOf(AccessDeniedError);
+      expect(
+        (
+          await answer({
+            identity: projectChatIdentity({ tenantId, projectId }),
+            sessionId,
+            request: pending,
+            decision: "approved",
+          })
+        ).status,
+      ).toBe("accepted");
+      await expect(decision).resolves.toBe("allow");
+    } finally {
+      listening = () => false;
+    }
+  });
+
+  it("lets the project's automation answer beside the approvers a chat names", async () => {
+    const sessionId = await chat({
+      owner: PROJECT_PRINCIPAL_ID,
+      approvers: { members: ["alice"] },
+    });
+    listening = () => true;
+    try {
+      const decision = sessions.askApproval({ ...ask, sessionId });
+      const pending = await pendingFor(sessionId);
+      // People approve here, so it waits as long as it does for them.
+      expect(pending.approvers).toEqual(["alice"]);
+      expect(
+        Date.parse(pending.expiresAt ?? "") - Date.parse(pending.createdAt),
+      ).toBeGreaterThan(29 * 60_000);
+      await answer({
+        identity: projectChatIdentity({ tenantId, projectId }),
+        sessionId,
+        request: pending,
+        decision: "denied",
+      });
+      await expect(decision).resolves.toBe("deny");
+    } finally {
+      listening = () => false;
+    }
+  });
+
+  it("denies when the automation that listens does not answer in time", async () => {
+    const sessionId = await chat({ owner: PROJECT_PRINCIPAL_ID });
+    listening = () => true;
+    try {
+      await expect(
+        sessions.askApproval({ ...ask, sessionId, timeoutMs: 400 }),
+      ).resolves.toBe("deny");
+      expect(
+        await db
+          .selectFrom("agent_runtime_requests")
+          .select(["status", "reason"])
+          .where("session_id", "=", sessionId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ status: "expired", reason: "Nobody answered in time." });
+    } finally {
+      listening = () => false;
+    }
   });
 
   it("denies with a reason when the approvers do not answer in time", async () => {
