@@ -169,6 +169,7 @@ describe("PGlite migrations", () => {
       "093_coalesced_runs_and_result_submissions.sql",
       "094_session_waits.sql",
       "095_machines_as_host_code.sql",
+      "096_workspace_checkouts.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -194,7 +195,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(109);
+    expect(tables.rows[0]?.count).toBe(110);
   });
 
   // Development profiles applied them under earlier numbers: 090 and 091
@@ -245,6 +246,7 @@ describe("PGlite migrations", () => {
         "093_coalesced_runs_and_result_submissions.sql",
         "094_session_waits.sql",
         "095_machines_as_host_code.sql",
+        "096_workspace_checkouts.sql",
       ]);
       const columns = await sql<{ count: number }>`
         SELECT COUNT(*)::int AS count
