@@ -23,6 +23,33 @@ export type ExecutionJobKind =
   | "batch_step"
   | "batch_sink";
 
+/**
+ * The job kinds that need no placement: a pause timeout advances the journal
+ * only (ADR 0289), and a host call's follower reads work that runs elsewhere
+ * (ADR 0324). Neither touches the run's sandbox nor needs one admitted, so:
+ *
+ * - any replica claims one and renews its lease, whatever became of the
+ *   run's Allocation (`workerPlacement` below);
+ * - one that runs or is due does not keep the Allocation, its workspace or
+ *   its capacity, and does not readmit the run (node recovery's predicates,
+ *   and `retirableAllocations` in the allocation sandbox provider);
+ * - one that is due is not demand for a machine (the Work server's
+ *   `queuedPlacementWait`).
+ *
+ * Every one of those reads this list. A kind belongs here only if all three
+ * hold for it: claiming without a placement while parking still counted the
+ * job, or the reverse, strands the run.
+ *
+ * A leased one still counts against its tenant's `max_concurrent_jobs`, as
+ * every job does. That ceiling bounds the worker loops a tenant occupies
+ * (ADR 0028), not sandboxes, and a follower's slice holds a loop for as
+ * long as it follows; between slices it holds no lease (ADR 0031).
+ */
+export const PLACEMENT_FREE_JOB_KINDS = [
+  "durable_pause_timeout",
+  "host_call_wait",
+] as const satisfies readonly ExecutionJobKind[];
+
 export type ExecutionJobStatus =
   | "pending"
   | "running"
@@ -474,11 +501,13 @@ export class ExecutionJobsService {
         // It would hold the Allocation while waiting for this job's row,
         // which the coordinator locks before it releases the Allocation
         // when the step ends the run: a deadlock. Without the lock, a
-        // renewal racing a release or a park (which does not count
-        // host_call_wait jobs as running) can extend this lease once, by
-        // at most leaseSeconds. It can never take back a job that was
-        // fenced, reclaimed or cancelled: the job row's status, token,
-        // generation and expiry are rechecked under its row lock.
+        // renewal racing a release can extend this lease once, by at most
+        // leaseSeconds. A park is no such race: it never releases an
+        // Allocation under a running job that needs it, and a
+        // placement-free job renews whatever became of the Allocation. A
+        // renewal can never take back a job that was fenced, reclaimed or
+        // cancelled: the job row's status, token, generation and expiry
+        // are rechecked under its row lock.
         workerPlacement(
           this.db,
           this.workerNode,
@@ -1216,22 +1245,24 @@ function workerPlacement(
   >(
     query: Query,
   ) => (options.lock ? query.modifyEnd(sql`FOR SHARE OF placement`) : query);
-  // Timeouts advance the journal only. They neither touch a sandbox nor
-  // need one admitted, including when the original machine is gone.
+  // Placement-free kinds neither touch a sandbox nor need one admitted,
+  // including when the run is parked or its original machine is gone.
   // Claiming and parking exclude each other on the Allocation alone;
   // workflow row locks belong to the coordinator's ordered tree locking.
-  const timeout = sql<boolean>`${sql.ref(kind)} = 'durable_pause_timeout'`;
+  const placementFree = sql<boolean>`${sql.ref(kind)} IN (${sql.join(
+    PLACEMENT_FREE_JOB_KINDS.map((free) => sql.lit(free)),
+  )})`;
   if (!node) {
     const unplaced = db
       .selectFrom("workflow_runs as unplaced_run")
       .select("id")
       .where("id", "=", sql<string>`${sql.ref(runId)}`)
       .where("allocation_id", "is", null);
-    return sql<boolean>`(${timeout} OR EXISTS (${unplaced}) OR EXISTS (${lock(
+    return sql<boolean>`(${placementFree} OR EXISTS (${unplaced}) OR EXISTS (${lock(
       placement.where("placement.worker_node_id", "is", null),
     )}))`;
   }
-  return sql<boolean>`(${timeout} OR EXISTS (${lock(
+  return sql<boolean>`(${placementFree} OR EXISTS (${lock(
     placement
       .innerJoin("worker_nodes as node", "node.id", "placement.worker_node_id")
       .where("node.id", "=", node.id)

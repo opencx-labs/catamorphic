@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import {
   isProjectPrincipal,
+  PLACEMENT_FREE_JOB_KINDS,
   PLACEMENT_WAIT_FRESH_SECONDS,
   type WorkerNode,
   type WorkerNodesService,
@@ -1031,7 +1032,8 @@ function waitFresh() {
 /**
  * Chats and runs reuse placement demand, and a cache fill that waits for a
  * machine with room for its size (ADR 0336); waiting journals alone are no
- * demand.
+ * demand, and neither is a job that needs no placement (a pause timeout, a
+ * host call's follower): any replica runs it without a machine.
  */
 function queuedPlacementWait(db: Kysely<DB>) {
   const turns = db
@@ -1052,7 +1054,7 @@ function queuedPlacementWait(db: Kysely<DB>) {
     .where("root.status", "in", ["pending", "running", "waiting"])
     .where("run.status", "in", ["pending", "running", "waiting"])
     .where("job.status", "=", "pending")
-    .where("job.kind", "!=", "durable_pause_timeout")
+    .where("job.kind", "not in", [...PLACEMENT_FREE_JOB_KINDS])
     .where("job.available_at", "<=", sql<Date>`now()`);
   const fills = db
     .selectFrom("environment_cache_fills")

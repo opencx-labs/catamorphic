@@ -32,6 +32,7 @@ import {
   type ExecutionEnvironmentsService,
   placementOwner,
 } from "./execution-environments-service.js";
+import { PLACEMENT_FREE_JOB_KINDS } from "./execution-jobs-service.js";
 import type {
   PlacementWaitsService,
   PlacementWaitTarget,
@@ -1186,6 +1187,12 @@ async function lockWorkflowAllocation(args: {
   return Boolean(allocation);
 }
 
+/**
+ * What still uses an Allocation: a running job, a registered invocation, or
+ * compute that is due. Placement-free jobs are none of these (see
+ * `PLACEMENT_FREE_JOB_KINDS`): while one runs the Allocation may be parked or
+ * the run readmitted, and one that is due readmits nothing.
+ */
 async function workflowAllocationWork(args: {
   trx: Kysely<DB>;
   allocationId: string;
@@ -1199,7 +1206,7 @@ async function workflowAllocationWork(args: {
     .select("id")
     .where("workflow_run_id", "in", runs)
     .where("status", "=", "running")
-    .where("kind", "!=", "host_call_wait")
+    .where("kind", "not in", [...PLACEMENT_FREE_JOB_KINDS])
     .limit(1)
     .executeTakeFirst();
   const invocations = await args.trx
@@ -1215,7 +1222,7 @@ async function workflowAllocationWork(args: {
     .where("run.allocation_id", "=", args.allocationId)
     .where("run.status", "in", ["pending", "running", "waiting"])
     .where("job.status", "=", "pending")
-    .where("job.kind", "not in", ["durable_pause_timeout", "host_call_wait"])
+    .where("job.kind", "not in", [...PLACEMENT_FREE_JOB_KINDS])
     .where("job.available_at", "<=", sql<Date>`clock_timestamp()`)
     .limit(1)
     .executeTakeFirst();
@@ -1226,22 +1233,24 @@ async function workflowAllocationWork(args: {
   };
 }
 
+/**
+ * The jobs that use an Allocation: those of the runs sharing it, less the
+ * kinds that need no placement. A pause timeout or a host call's follower
+ * (ADRs 0289, 0324) neither holds the Allocation while it runs nor readmits
+ * the run when it is due, and any replica claims it meanwhile.
+ */
 function allocationJobs(db: Kysely<DB>, allocationId: string) {
-  return (
-    db
-      .selectFrom("execution_jobs as job")
-      .innerJoin("workflow_runs as run", "run.id", "job.workflow_run_id")
-      .select("job.id")
-      .where("run.allocation_id", "=", sql<string>`${sql.ref(allocationId)}`)
-      // Following a host call (ADR 0324) needs none of the run's capacity.
-      .where("job.kind", "!=", "host_call_wait")
-  );
+  return db
+    .selectFrom("execution_jobs as job")
+    .innerJoin("workflow_runs as run", "run.id", "job.workflow_run_id")
+    .select("job.id")
+    .where("run.allocation_id", "=", sql<string>`${sql.ref(allocationId)}`)
+    .where("job.kind", "not in", [...PLACEMENT_FREE_JOB_KINDS]);
 }
 
 function runnableAllocationJobs(db: Kysely<DB>, allocationId: string) {
   return allocationJobs(db, allocationId)
     .where("run.status", "in", ["pending", "running", "waiting"])
     .where("job.status", "=", "pending")
-    .where("job.kind", "!=", "durable_pause_timeout")
     .where("job.available_at", "<=", sql<Date>`clock_timestamp()`);
 }

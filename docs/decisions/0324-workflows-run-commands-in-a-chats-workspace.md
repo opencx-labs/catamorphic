@@ -61,7 +61,10 @@ A command that outlives its boundary attempt (ADR 0295) parks the step: the
 call records a host-call wait (`workflow_pauses` with the call), the run
 waits and gives back its capacity as any wait does (ADR 0289), and a
 follower job reads the process to its end and resumes the step with the
-result, carried state included (ADR 0260). The execution is a session
+result, carried state included (ADR 0260). Like a pause timeout (ADR 0289)
+the follower needs no placement: any replica claims it and renews its lease
+while the run is parked, and it neither keeps the run's Allocation or
+workspace nor counts as demand for a machine. The execution is a session
 action, so a retry with the same key returns the same execution's result
 rather than running it twice; a start taken over from a replica that
 stopped adopts the process or exit it left. Canceling the run stops

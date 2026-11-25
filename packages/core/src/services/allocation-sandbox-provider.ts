@@ -13,6 +13,7 @@ import {
 import { type Kysely, type RawBuilder, type SqlBool, sql } from "kysely";
 import { cacheMounts } from "./cache-mounts.js";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
+import { PLACEMENT_FREE_JOB_KINDS } from "./execution-jobs-service.js";
 import { retireAllocationWork } from "./node-recovery-service.js";
 import { RemoteSandboxUnknownError } from "./remote-operations.js";
 import { sandboxProjectDirectory } from "./sandbox-git.js";
@@ -733,7 +734,8 @@ export async function cleanupWorkerAllocations(args: {
 /**
  * A node's released Allocations whose workspace may be destroyed now:
  * capacity not yet released, and no turn with a live lease or running job
- * still in them.
+ * still in them. A job that needs no placement is not in the workspace: a
+ * parked run's capacity comes back while its host call is followed.
  */
 function retirableAllocations(args: { db: Kysely<DB>; workerNodeId: string }) {
   return args.db
@@ -762,6 +764,7 @@ function retirableAllocations(args: { db: Kysely<DB>; workerNodeId: string }) {
             .select("job.id")
             .whereRef("run.allocation_id", "=", "execution_allocations.id")
             .where("job.status", "=", "running")
+            .where("job.kind", "not in", [...PLACEMENT_FREE_JOB_KINDS])
             .where("job.lease_expires_at", ">", sql<Date>`now()`),
         ),
       ),
