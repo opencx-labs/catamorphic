@@ -67,9 +67,15 @@ function chatOf(context: ExtraToolContext): {
 /**
  * The subsession tools (ADRs 0090, 0202, 0271, 0322): one definition, which
  * core serves to agents whose host serves none of them and a host may
- * build over its own operations.
+ * build over its own operations. `copies: false` is an agent whose grants
+ * name other agents only: its `agent` is required, so it is never left out
+ * for a copy the grants refuse (ADR 0351).
  */
-export function subsessionTools(operations: SubsessionOperations): ExtraTool[] {
+export function subsessionTools(
+  operations: SubsessionOperations,
+  options: { copies?: boolean } = {},
+): ExtraTool[] {
+  const copies = options.copies !== false;
   return [
     {
       name: "spawn_subsession",
@@ -82,13 +88,20 @@ export function subsessionTools(operations: SubsessionOperations): ExtraTool[] {
           .describe(
             "The whole task: the child sees nothing else unless inherit",
           ),
-        agent: z
-          .string()
-          .min(1)
-          .optional()
-          .describe(
-            "An agent id from your instructions' list; leave out for a copy of yourself",
-          ),
+        agent: copies
+          ? z
+              .string()
+              .min(1)
+              .optional()
+              .describe(
+                "An agent id from your instructions' list; leave out for a copy of yourself",
+              )
+          : z
+              .string()
+              .min(1)
+              .describe(
+                "An agent id from your instructions' list. Required: you may not start a copy of yourself",
+              ),
         model: z
           .string()
           .min(1)

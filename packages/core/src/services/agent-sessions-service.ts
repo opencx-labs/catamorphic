@@ -72,6 +72,7 @@ import {
   type AgentExecutionTopology,
   type AgentMcpServerConfig,
   type AgentTurnUsage,
+  ANSWERED_IN_TIME_NOTE,
   ATTACHMENT_MARKER,
   type AttachedPluginForAgent,
   agentCapabilityTools,
@@ -183,6 +184,7 @@ import {
   isHttpMethodCapability,
   isProtocolCapability,
   MODEL_CAPABILITY,
+  normalizeConnectionRequirement,
   type ResolvedConnectionBinding,
 } from "./connection-types.js";
 import { DbSandboxStore } from "./db-sandbox-store.js";
@@ -312,8 +314,16 @@ import { modelInputText } from "./sessions/input-text.js";
 import { NativeStateStore } from "./sessions/native-state.js";
 import type { ChatPullRequest } from "./sessions/pull-request-tool.js";
 import {
+  type RequestListeners,
+  recordRequestsOpened,
+  requestEventInput,
+  requestEventSession,
+  requestOpenedEvent,
+} from "./sessions/request-events.js";
+import {
   approvalPolicy,
   expiredApprovalReason,
+  isUnattended,
 } from "./sessions/request-policy.js";
 import {
   hostRunnerStateDirectory,
@@ -1248,6 +1258,12 @@ interface AgentSessionsDeps {
    */
   wakeups?: WorkWakeups;
   idlePollMs?: number;
+  /**
+   * Whether a project automation listens for a request that opens (ADR
+   * 0352). Absent, none does: an unattended chat no person approves for
+   * refuses its approvals at once.
+   */
+  requestListeners?: RequestListeners;
   projectManager: ProjectManager;
   codingAgents: CodingAgentRegistry;
   /**
@@ -1525,6 +1541,7 @@ export class AgentSessionsService {
   private readonly workspaceClaimSeconds: number;
   private readonly reshapeWaitMs: number;
   private readonly wakeups?: WorkWakeups;
+  private readonly requestListeners?: RequestListeners;
   private readonly idlePollMs?: number;
   private readonly projectManager: ProjectManager;
   private readonly codingAgents: CodingAgentRegistry;
@@ -2044,6 +2061,7 @@ export class AgentSessionsService {
     this.reshapeWaitMs = (deps.reshapeWaitMinutes ?? 10) * 60_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.wakeups = deps.wakeups;
+    this.requestListeners = deps.requestListeners;
     this.idlePollMs = deps.idlePollMs;
     this.log = new SessionLog(db, deps.wakeups);
     this.queue = new TurnQueue(db, this.log);
@@ -4496,15 +4514,14 @@ export class AgentSessionsService {
     session: SessionRow;
     request: RuntimeRequest;
   }): void {
-    if (input.request.approvers.length > 0) {
-      if (!input.request.approvers.includes(input.identity.externalUserId))
-        throw new SessionCommandRejectedError(
-          "not_an_approver",
-          "Only this chat's approvers can answer this request.",
-          403,
-        );
-      return;
-    }
+    const audience = requestAudience(input);
+    if (audience === "approver") return;
+    if (audience === "refused")
+      throw new SessionCommandRejectedError(
+        "not_an_approver",
+        "Only this chat's approvers can answer this request.",
+        403,
+      );
     assertAgentSessionAccess({
       identity: input.identity,
       projectId: input.session.project_id,
@@ -4530,10 +4547,9 @@ export class AgentSessionsService {
       .where("request_id", "=", input.requestId)
       .executeTakeFirst();
     const request = row ? requestFromRow(row) : undefined;
-    if (request?.approvers.length) {
-      if (request.approvers.includes(input.identity.externalUserId)) return;
-      throw new AccessDeniedError();
-    }
+    const audience = request ? requestAudience({ ...input, request }) : "chat";
+    if (audience === "approver") return;
+    if (audience === "refused") throw new AccessDeniedError();
     assertAgentSessionAccess({
       identity: input.identity,
       projectId: input.session.project_id,
@@ -5031,6 +5047,9 @@ export class AgentSessionsService {
     requests: RuntimeRequest[];
   }): Promise<void> {
     this.chatsChanged();
+    // Each opened request is a session event (ADR 0352): a workflow bound
+    // to it starts now, not at the dispatcher's next look.
+    this.wakeups?.notify("events");
     await this.notifyApprovers(input);
     const owner = this.onTurnSettled ? await this.ownerOf(input.session) : null;
     if (!owner) return;
@@ -5123,8 +5142,14 @@ export class AgentSessionsService {
     signal?: AbortSignal;
   }): Promise<"allow" | "deny"> {
     const policy = await approvalPolicy(this.db, input.sessionId);
-    if (policy.unattended && policy.approvers.length === 0) return "deny";
-    const timeoutMs = input.timeoutMs ?? policy.waitMs;
+    // No one watches and no automation could listen: refused at once.
+    if (
+      policy.unattended &&
+      policy.approvers.length === 0 &&
+      !this.requestListeners
+    )
+      return "deny";
+    let timeoutMs = input.timeoutMs ?? policy.waitMs;
     const opened = await this.db.transaction().execute(async (trx) => {
       // The session first, as everything that changes it locks it.
       await this.log.lock(trx, input.sessionId);
@@ -5165,6 +5190,26 @@ export class AgentSessionsService {
         createdAt: now,
         resolvedAt: null,
       };
+      // An unattended chat's approval waits for a project automation that
+      // listens for it (ADR 0352), and for no one else when no person
+      // approves there.
+      const chat = await requestEventSession(trx, input.sessionId);
+      if (policy.unattended && policy.approvers.length === 0) {
+        const automated = await this.requestListeners?.({
+          executor: trx,
+          projectId: chat.projectId,
+          event: requestEventInput(requestOpenedEvent(chat, request)),
+        }).catch((error: unknown) => {
+          console.warn(
+            "[catamorphic] Could not ask who listens for a request",
+            error,
+          );
+          return false;
+        });
+        if (!automated) return null;
+        timeoutMs = input.timeoutMs ?? policy.automatedWaitMs;
+        request.expiresAt = new Date(openedAt + timeoutMs).toISOString();
+      }
       const events: SessionEvent[] = [
         { type: "request.changed", request },
         {
@@ -5199,6 +5244,7 @@ export class AgentSessionsService {
           },
         });
       await this.log.append(trx, { sessionId: input.sessionId, events });
+      await recordRequestsOpened(trx, [requestOpenedEvent(chat, request)]);
       return { request, turn };
     });
     if (!opened) return "deny";
@@ -6143,6 +6189,9 @@ export class AgentSessionsService {
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
       requestsOpened: (input) => this.afterRequestsOpened(input),
+      ...(this.requestListeners
+        ? { requestListeners: this.requestListeners }
+        : {}),
       // Whether a failure is passing is the agent's host's to say (ADR 0228).
       retryFailure: async ({ session, turn, error }) => {
         const agent = await this.resolveAgent(
@@ -6295,9 +6344,11 @@ export class AgentSessionsService {
       .where("turn.session_id", "=", input.sessionId)
       .executeTakeFirst();
     const checkpoint = row?.checkpoint_before?.trim();
-    const base = row ? parseWorkspaceBase(row.workspace) : null;
-    if (!row || !checkpoint || !base || checkpoint === base.commit)
-      return undefined;
+    if (!row || !checkpoint) return undefined;
+    // The workspace session's base: a shared subsession's own row may lag
+    // a move (ADR 0322).
+    const base = await this.workspaceBaseOf(row).catch(() => null);
+    if (!base || checkpoint === base.commit) return undefined;
     try {
       const copy = await this.projectManager.openSession({
         tenantId: row.tenant_id,
@@ -6419,19 +6470,22 @@ export class AgentSessionsService {
     const { identity } = input;
     return [
       ...hosted,
-      ...subsessionTools({
-        spawn: ({ projectId, sessionId, request }) =>
-          this.createSubsession(identity, projectId, sessionId, request),
-        waitFor: ({ projectId, sessionId, ...wait }) =>
-          this.waitForSubsessions(identity, projectId, sessionId, wait),
-        interrupt: ({ projectId, sessionId, childSessionId }) =>
-          this.interruptSubsession(
-            identity,
-            projectId,
-            sessionId,
-            childSessionId,
-          ),
-      }),
+      ...subsessionTools(
+        {
+          spawn: ({ projectId, sessionId, request }) =>
+            this.createSubsession(identity, projectId, sessionId, request),
+          waitFor: ({ projectId, sessionId, ...wait }) =>
+            this.waitForSubsessions(identity, projectId, sessionId, wait),
+          interrupt: ({ projectId, sessionId, childSessionId }) =>
+            this.interruptSubsession(
+              identity,
+              projectId,
+              sessionId,
+              childSessionId,
+            ),
+        },
+        { copies: startsCopies(delegationPolicy(input.agent.delegation)) },
+      ),
     ];
   }
 
@@ -6491,12 +6545,29 @@ export class AgentSessionsService {
     attempt: Attempt;
     name: string;
     input: JsonValue;
+    readAt: number;
     stopWaiting: AbortSignal;
   }): Promise<HostToolResult> {
     const agent = await this.resolveAgent(
       input.session.agent_id,
       input.session.project_id,
     );
+    // A harness whose client gives a tool call up after its own timeout
+    // loses the answer of a wait that outlasts it: every wait in the tool
+    // ends before then, as it ends when something reaches the chat (ADRs
+    // 0264, 0351).
+    const answerBy =
+      agent.toolTimeoutMs === undefined
+        ? undefined
+        : AbortSignal.timeout(
+            Math.max(
+              0,
+              input.readAt + toolAnswerMs(agent.toolTimeoutMs) - Date.now(),
+            ),
+          );
+    const stopWaiting = answerBy
+      ? AbortSignal.any([input.stopWaiting, answerBy])
+      : input.stopWaiting;
     const tools = await this.hostToolsFor({
       identity: input.identity,
       session: input.session,
@@ -6521,17 +6592,19 @@ export class AgentSessionsService {
         tenantId: input.identity.tenantId,
         externalUserId: input.identity.externalUserId,
       },
-      stopWaiting: input.stopWaiting,
+      stopWaiting,
     });
     const answer = hostToolResult(extraToolResult(result));
     // Said once, for every tool: why a wait came back early (ADR 0264).
-    return input.stopWaiting.aborted
+    const note = input.stopWaiting.aborted
+      ? STOPPED_WAITING_NOTE
+      : answerBy?.aborted
+        ? ANSWERED_IN_TIME_NOTE
+        : undefined;
+    return note
       ? {
           ...answer,
-          content: [
-            ...answer.content,
-            { type: "text", text: STOPPED_WAITING_NOTE },
-          ],
+          content: [...answer.content, { type: "text", text: note }],
         }
       : answer;
   }
@@ -7467,7 +7540,12 @@ export class AgentSessionsService {
     };
   }
 
-  /** The workspace's current commit: what a rollback of this turn restores. */
+  /**
+   * The workspace's current commit: what a rollback of this turn restores,
+   * and what its results are about (ADR 0323). A shared subsession reads
+   * its workspace session's copy (ADR 0322): it keeps none of its own, and
+   * one opened under its own id would be a new clone of the project's main.
+   */
   private async workspaceHead(input: {
     identity: Identity;
     session: SessionRow;
@@ -7483,7 +7561,7 @@ export class AgentSessionsService {
     const copy = await this.projectManager.openSession({
       tenantId: input.identity.tenantId,
       projectId: input.session.project_id,
-      sessionId: input.session.id,
+      sessionId: workspaceCopyId(input.session),
     });
     try {
       return await copy.resolveRef("HEAD");
@@ -9456,10 +9534,12 @@ export class AgentSessionsService {
     signal: AbortSignal;
   }): Promise<{ note?: string; settled: boolean }> {
     const { identity, projectId, session, provider } = input;
+    // The workspace session's copy holds the base (ADR 0322): a shared
+    // subsession whose turn makes the workspace has none of its own.
     const copy = await this.projectManager.openSession({
       tenantId: identity.tenantId,
       projectId,
-      sessionId: session.id,
+      sessionId: workspaceCopyId(session),
     });
     try {
       await seedSandboxBase({
@@ -11962,11 +12042,14 @@ export class AgentSessionsService {
     const bound = new Set(
       (allocation.policy.connections ?? []).map((binding) => binding.alias),
     );
+    // An optional connection the workspace was not given is left out, as
+    // admission leaves one out of a workspace of its own (ADR 0181).
     const missing = (targetAgent.connectionRequirements ?? [])
-      .map((requirement) =>
-        typeof requirement === "string" ? requirement : requirement.alias,
+      .map(normalizeConnectionRequirement)
+      .filter(
+        (requirement) => !requirement.optional && !bound.has(requirement.alias),
       )
-      .filter((alias) => !bound.has(alias));
+      .map((requirement) => requirement.alias);
     if (missing.length > 0)
       throw refuse(
         `${targetAgentId} needs the connection${missing.length === 1 ? "" : "s"} ${missing.join(", ")}, which this chat's workspace was not given.`,
@@ -15207,7 +15290,7 @@ export class AgentSessionsService {
       return "Delegation is disabled for this agent. Do not call spawn_subsession.";
     }
     return [
-      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work, and so does anything it reports later. A subagent whose agent declares results submits them typed with submit_result, and its latest result of each name comes with that message and in its list and wait outputs. By default a subagent works in your workspace: your files as they are now, with nothing to set up again, its commands running beside yours. One that writes edits those same files, so give subagents that write in parallel workspace: own, a workspace of their own started where yours started. A copy of yourself starts on this chat's model and effort, another agent on its own; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
+      `Subsessions are your subagents. spawn_subsession starts one on a bounded, self-contained task that runs in parallel with you, at most ${policy.maxConcurrentChildren} at a time: use it wherever you would use a subagent or a Task tool, such as parallel research or exploration, independent reviews, or work to keep out of this conversation. Its result arrives here as a message from it, during your turn while you still work, and so does anything it reports later. A subagent whose agent declares results submits them typed with submit_result, and its latest result of each name comes with that message and in its list and wait outputs. By default a subagent works in your workspace: your files as they are now, with nothing to set up again, its commands running beside yours. One that writes edits those same files, so give subagents that write in parallel workspace: own, a workspace of their own started where yours started. ${startsCopies(policy) ? "A copy of yourself starts on this chat's model and effort, another agent on its own" : "You start the agents listed below, never a copy of yourself, so always name one in agent; each starts on its own model and effort"}; set model or effort to run a subagent stronger or cheaper, naming the model as that agent's harness does (one it does not offer is refused with the list). read_only and delegate: false need no grant. read_only runs a subagent that changes nothing, where its harness has a read-only mode (Claude Code: plan mode, without a shell; Codex: its read-only sandbox), with only those of Work's tools that read.`,
       await this.delegationChoices(identity, projectId, sourceAgent),
     ].join("\n");
   }
@@ -17110,6 +17193,50 @@ function withAgentLayers(
   for (const [server, layers] of Object.entries(own))
     merged[server] = [...(merged[server] ?? []), ...layers];
   return merged;
+}
+
+/**
+ * Who a request's answer is checked against (ADRs 0176, 0352). `approver`:
+ * one of the people named for it, who need no other access to the chat.
+ * `chat`: whoever may change the chat, which is how a person's own chat is
+ * answered, and how the project's automations answer what its unattended
+ * chats ask. `refused`: an unattended chat's approval is only its
+ * approvers' and its project's automations' to give, never a member's who
+ * can merely continue the chat.
+ */
+function requestAudience(input: {
+  identity: Identity;
+  session: Pick<SessionRow, "external_user_id" | "approvers">;
+  request: RuntimeRequest;
+}): "approver" | "chat" | "refused" {
+  const { identity, request } = input;
+  if (request.approvers.includes(identity.externalUserId)) return "approver";
+  const unattended = isUnattended(input.session);
+  if (unattended && isProjectPrincipal(identity.externalUserId)) return "chat";
+  return request.approvers.length > 0 ||
+    (unattended && request.kind === "approval")
+    ? "refused"
+    : "chat";
+}
+
+/**
+ * Whether an agent's grants let it start a copy of itself (ADR 0271): one
+ * names `self`, or a wildcard may admit it. Otherwise its spawn tool
+ * requires `agent`, and nothing it reads suggests leaving it out.
+ */
+function startsCopies(policy: AgentDelegationPolicy): boolean {
+  return policy.agents.some(
+    (grant) => grant.agent === "self" || grant.agent === "*",
+  );
+}
+
+/**
+ * How long Work's tools hold a call of a harness whose client waits
+ * `timeoutMs` for an answer (ADR 0351): a quarter less, at most 15 seconds,
+ * left for the call to arrive and its answer to travel back.
+ */
+export function toolAnswerMs(timeoutMs: number): number {
+  return Math.max(0, timeoutMs - Math.min(15_000, timeoutMs / 4));
 }
 
 /**

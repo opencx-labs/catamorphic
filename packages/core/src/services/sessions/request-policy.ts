@@ -10,6 +10,12 @@ type Executor = Kysely<DB> | Transaction<DB>;
 export const ATTENDED_APPROVAL_MS = 5 * 60_000;
 /** How long an unattended chat waits for its approvers by default. */
 export const UNATTENDED_APPROVAL_MS = 30 * 60_000;
+/**
+ * How long an unattended chat no person approves for waits for the
+ * project's automations by default (ADR 0352): a workflow answers in
+ * seconds, so one that does not is not worth half an hour of a turn.
+ */
+export const AUTOMATED_APPROVAL_MS = 2 * 60_000;
 
 const approversSchema = z.object({
   members: z.array(z.string()).optional(),
@@ -29,6 +35,8 @@ export interface ApprovalPolicy {
   /** The people who answer an unattended chat's approvals. */
   approvers: string[];
   waitMs: number;
+  /** How long it waits when only the project's automations answer. */
+  automatedWaitMs: number;
 }
 
 /**
@@ -109,24 +117,42 @@ export async function approvalPolicy(
       : waitMinutes
         ? waitMinutes * 60_000
         : UNATTENDED_APPROVAL_MS,
+    automatedWaitMs: waitMinutes ? waitMinutes * 60_000 : AUTOMATED_APPROVAL_MS,
   };
 }
 
 /**
+ * Whether a chat has no person in it (ADR 0176): a project chat, or one
+ * whose delivering automation named approvers.
+ */
+export function isUnattended(session: {
+  external_user_id: string;
+  approvers: unknown;
+}): boolean {
+  return (
+    isProjectPrincipal(session.external_user_id) || session.approvers !== null
+  );
+}
+
+/**
  * An approval as it opens under its chat's policy: who answers it and when
- * it expires, or why it is refused at once because no one can.
+ * it expires, or why it is refused at once because no one can. `automated`
+ * says a project automation listens for this request (ADR 0352): an
+ * unattended chat's approval then waits for it, with or without people.
  */
 export function governApproval(input: {
   request: RuntimeRequest;
   policy: ApprovalPolicy;
   now: number;
+  automated?: boolean;
 }): { request: RuntimeRequest; refusal?: string } {
   const { request, policy } = input;
   const action = request.approval?.tool
     ? `"${request.approval.tool.name}" on ${request.approval.tool.server ?? "this agent"}`
     : (request.approval?.action ?? request.title);
-  if (policy.unattended && policy.approvers.length === 0) {
-    const refusal = `${action} needs a person's approval, and no one watches this chat. The automation that delivers into it can name approvers (members or project roles).`;
+  const automated = policy.unattended && input.automated === true;
+  if (policy.unattended && policy.approvers.length === 0 && !automated) {
+    const refusal = `${action} needs approval, and no one watches this chat. The automation that delivers into it can name approvers (members or project roles), or a project workflow can answer what it asks (session.request-opened).`;
     return {
       refusal,
       request: {
@@ -142,7 +168,12 @@ export function governApproval(input: {
     request: {
       ...request,
       approvers: policy.approvers,
-      expiresAt: new Date(input.now + policy.waitMs).toISOString(),
+      expiresAt: new Date(
+        input.now +
+          (automated && policy.approvers.length === 0
+            ? policy.automatedWaitMs
+            : policy.waitMs),
+      ).toISOString(),
     },
   };
 }

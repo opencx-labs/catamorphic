@@ -422,6 +422,14 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
               z.string().max(4096),
             )
             .optional(),
+          /**
+           * How long the agent's client waits for a tool call's answer
+           * before it gives the call up (its MCP request timeout). Work
+           * ends every wait in its tools before then (ADR 0351). Default
+           * 60, the MCP SDK's own. Outside the consent hash: it grants
+           * nothing.
+           */
+          toolTimeoutSeconds: z.number().int().min(10).max(3600).optional(),
         })
         .optional(),
     })
@@ -476,7 +484,22 @@ export interface AgentDefinition {
     shell?: boolean;
     projectConfig?: boolean;
     env?: Record<string, string>;
+    /** How long its client waits for a tool call's answer (ADR 0351). */
+    toolTimeoutSeconds?: number;
   };
+}
+
+/**
+ * An MCP client's request timeout unless its agent says otherwise: what
+ * an ACP agent's client waits for a tool call's answer (ADR 0351).
+ */
+export const ACP_TOOL_TIMEOUT_SECONDS = 60;
+
+/** How long an ACP agent's client waits for a tool call, in milliseconds. */
+export function acpToolTimeoutMs(
+  acp: AgentDefinition["acp"] | undefined,
+): number {
+  return (acp?.toolTimeoutSeconds ?? ACP_TOOL_TIMEOUT_SECONDS) * 1000;
 }
 
 export interface ProjectAgentEntry {

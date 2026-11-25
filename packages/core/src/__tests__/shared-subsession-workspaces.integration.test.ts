@@ -98,6 +98,10 @@ class ModelAdmission extends ConnectionAdmissionService {
   }
 }
 
+/** A tool directive the echo harness runs: `[[tool <name> <json>]]`. */
+const tool = (name: string, input: unknown) =>
+  `[[tool ${name} ${JSON.stringify(input)}]]`;
+
 /** Polls until `check` holds, failing with `what` after `ms`. */
 async function until(
   what: string,
@@ -121,6 +125,8 @@ describe("subagents of a server agent (ADR 0322)", () => {
   /** Present: the setup takes a while longer. */
   let slow: string;
   let projectId: string;
+  /** The pull request's head: what a review of it is about. */
+  let pullRequestHead: string;
   let sessions: AgentSessionsService;
   let machine: LocalProcessSandboxProvider;
   const allocations = new ExecutionAllocationsService(db);
@@ -210,6 +216,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
     await git(seed, ["checkout", "-q", "-b", "pr"]);
     await fs.writeFile(path.join(seed, "README.md"), "pull request\n");
     await git(seed, ["commit", "-q", "-am", "change"]);
+    pullRequestHead = await git(seed, ["rev-parse", "HEAD"]);
     await git(seed, ["checkout", "-q", "main"]);
     const remote = path.join(tmpDir, "remote.git");
     await execFileAsync("git", ["clone", "-q", "--bare", seed, remote]);
@@ -316,14 +323,38 @@ describe("subagents of a server agent (ADR 0322)", () => {
       topology: "controller",
       connectionRequirements: ["model"],
       modelConnection: "model",
+      results: {
+        vote: {
+          type: "object",
+          required: ["verdict"],
+          additionalProperties: false,
+          properties: { verdict: { enum: ["confirmed", "disproved"] } },
+        },
+      },
       delegation: {
         enabled: true,
         maxConcurrentChildren: 2,
         agents: [
           { agent: "self", model: "any", effort: "any", delegate: true },
           { agent: "publisher", model: "any", effort: "any", delegate: false },
+          { agent: "analyst", model: "any", effort: "any", delegate: false },
+          { agent: "strict", model: "any", effort: "any", delegate: false },
         ],
       },
+    };
+    // One that reads the logs when its workspace has them (ADR 0181).
+    const analyst: RegisteredCodingAgent = {
+      ...agent,
+      id: "analyst",
+      connectionRequirements: ["model", { alias: "logs", optional: true }],
+      delegation: undefined,
+    };
+    // One that cannot work without them.
+    const strict: RegisteredCodingAgent = {
+      ...agent,
+      id: "strict",
+      connectionRequirements: ["model", "logs"],
+      delegation: undefined,
     };
     // Another agent, sandboxed to publish what it changes.
     const publisher: RegisteredCodingAgent = {
@@ -345,7 +376,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
         ],
       },
     };
-    const agents = [agent, publisher, sealed];
+    const agents = [agent, publisher, sealed, analyst, strict];
     sessions = new AgentSessionsService(db, {
       hostId: "shared-subsessions-host",
       // Short, so a claim another replica takes is noticed at once.
@@ -956,6 +987,11 @@ describe("subagents of a server agent (ADR 0322)", () => {
     const parent = await sessions.create(identity, projectId, {
       agentId: "sealed",
     });
+    // Its grants name one other agent: nothing it reads suggests a copy of
+    // itself, which they would refuse (ADR 0351).
+    const prompt = (await session(parent.id)).system_prompt ?? "";
+    expect(prompt).toContain("never a copy of yourself");
+    expect(prompt).not.toContain("A copy of yourself starts");
     const shared = () =>
       sessions.createSubsession(identity, projectId, parent.id, {
         task: "Publish the fix",
@@ -967,6 +1003,95 @@ describe("subagents of a server agent (ADR 0322)", () => {
       await sessions.listSubsessions(identity, projectId, parent.id),
     ).toEqual([]);
   }, 60_000);
+
+  it("stamps a shared child's results with the commit its workspace stands on, as its parent's are", async () => {
+    const parent = await sessions.create(identity, projectId, {
+      workspace: { ref: "pr" },
+    });
+    const first = await sessions.sendMessage(
+      identity,
+      projectId,
+      parent.id,
+      `Review it. ${tool("submit_result", { name: "vote", value: { verdict: "confirmed" } })}`,
+    );
+    expect(first.turn.status).toBe("completed");
+    const child = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      {
+        task: `Try to disprove it. ${tool("submit_result", { name: "vote", value: { verdict: "disproved" } })}`,
+      },
+    );
+    expect(child.workspace).toBe("shared");
+    await until("the child votes", async () => {
+      const results = await sessions.results(identity, projectId, parent.id, {
+        family: true,
+      });
+      return results.some((result) => result.sessionId === child.session.id);
+    });
+    await until(
+      "both rest",
+      async () => (await idle(parent.id)) && (await idle(child.session.id)),
+    );
+    const results = await sessions.results(identity, projectId, parent.id, {
+      family: true,
+    });
+    // Both are about the pull request's head, never the project's main: a
+    // rule over a family's results compares their commits.
+    expect(
+      results
+        .map((result) => ({ from: result.sessionId, commit: result.commit }))
+        .sort((a, b) => a.from.localeCompare(b.from)),
+    ).toEqual(
+      [
+        { from: parent.id, commit: pullRequestHead },
+        { from: child.session.id, commit: pullRequestHead },
+      ].sort((a, b) => a.from.localeCompare(b.from)),
+    );
+    // The child keeps no copy of its own: its turn read its workspace's.
+    const copies = await fs.readdir(path.join(tmpDir, "projects"), {
+      recursive: true,
+    });
+    expect(
+      copies.some((entry) => String(entry).includes(child.session.id)),
+    ).toBe(false);
+  }, 120_000);
+
+  it("shares a workspace with a child whose optional connection it was not given, and refuses one that requires it", async () => {
+    const parent = await sessions.create(identity, projectId);
+    const first = await sessions.sendMessage(
+      identity,
+      projectId,
+      parent.id,
+      "Make the workspace.",
+    );
+    expect(first.turn.status).toBe("completed");
+    // The workspace was admitted with the model alone.
+    const allocation = await allocations.get({
+      identity,
+      allocationId: (await session(parent.id)).allocation_id ?? "",
+    });
+    expect(
+      (allocation?.policy.connections ?? []).map((binding) => binding.alias),
+    ).toEqual(["model"]);
+    const optional = await sessions.createSubsession(
+      identity,
+      projectId,
+      parent.id,
+      { task: "Read what you can", agentId: "analyst" },
+    );
+    expect(optional.workspace).toBe("shared");
+    expect(optional.session.workspaceSessionId).toBe(parent.id);
+    await until("the child rests", () => idle(optional.session.id));
+    const required = () =>
+      sessions.createSubsession(identity, projectId, parent.id, {
+        task: "Read the logs",
+        agentId: "strict",
+      });
+    await expect(required()).rejects.toThrow(/needs the connection logs/);
+    await expect(required()).rejects.toThrow(/workspace: "own"/);
+  }, 120_000);
 
   it("shares a chat's workspace only with those who may work in it, and the child is that chat's", async () => {
     const chat = await sessions.create(

@@ -355,3 +355,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0348](0348-every-lost-machine-recovers.md) | Every lost machine recovers: one loss rule, one retirement, replacement, and chats that continue | Accepted (amends 0173, 0190, 0192, 0205, 0258) |
 | [0349](0349-machines-are-decided-and-made-by-host-code.md) | Machines are decided and made by host code | Accepted (supersedes machine policy in 0167, 0205, 0258, 0327; amends 0164, 0294, 0348) |
 | [0350](0350-machines-stop-and-resume.md) | Machines stop and resume; installation is a recipe | Accepted (amends 0100, 0173, 0204, 0205) |
+| [0351](0351-a-shared-subsession-stands-on-its-workspace-and-waits-end-in-time.md) | A shared subsession stands on its workspace, and a tool's wait ends before the agent's client gives up | Proposed (amends 0241, 0264, 0271, 0322, 0323) |
+| [0352](0352-an-opened-request-is-a-session-event-automations-answer-unattended-approvals.md) | An opened request is a session event, and a project's automations answer an unattended chat's approvals | Proposed (amends 0054, 0138, 0176, 0181) |

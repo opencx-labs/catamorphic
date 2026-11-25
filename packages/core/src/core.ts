@@ -156,6 +156,7 @@ import { SessionSyncService } from "./services/session-sync-service.js";
 import { SessionTerminalsService } from "./services/session-terminals-service.js";
 import { SessionWaitsService } from "./services/session-waits-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
+import { REQUEST_OPENED_EVENT } from "./services/sessions/request-events.js";
 import { runSetupWorkflow } from "./services/setup-workflow-runner.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
@@ -1465,6 +1466,14 @@ export class CatamorphicCore {
         : singleAgentRegistry(config.codingAgent);
       this.agentSessions = new AgentSessionsService(this.db, {
         agentCapabilities: this.agentCapabilities,
+        // A project automation bound to the request event (ADR 0352).
+        requestListeners: ({ executor, projectId, event }) =>
+          this.triggers.projectListens({
+            executor,
+            projectId,
+            kind: REQUEST_OPENED_EVENT,
+            payload: event,
+          }),
         hostId: config.hostId,
         workerNode: config.workerNode,
         wakeups: this.wakeups,
