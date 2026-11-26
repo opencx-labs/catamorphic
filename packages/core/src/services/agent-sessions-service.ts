@@ -2098,7 +2098,7 @@ export class AgentSessionsService {
     this.nativeAgentCheckout = deps.nativeAgentCheckout;
     this.executionEnvironments = deps.executionEnvironments;
     this.executionAllocations = deps.executionAllocations;
-    this.placementWaits = new PlacementWaitsService(db);
+    this.placementWaits = new PlacementWaitsService(db, deps.wakeups);
     this.connectionAdmission = deps.connectionAdmission;
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;

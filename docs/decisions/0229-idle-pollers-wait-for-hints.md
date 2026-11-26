@@ -25,9 +25,10 @@ a refreshing spinner each time. A streamed answer cost a transaction
 writer hints its topic after writing: `execution` (a job enqueued or made
 claimable: a resumed run, an authorized connection), `agent` (a queued
 turn), `events` (a project event, a monitor or its watcher), `sessions`
-(any session event) and `chats` (what chat lists, attention and watchers
+(any session event), `chats` (what chat lists, attention and watchers
 show: a session event other than streamed text, a chat created, its
-visibility, attention, icon or watchers). Hints carry nothing and are
+visibility, attention, icon or watchers) and `placement` (work that began
+waiting for a machine, which the host that makes machines hears). Hints carry nothing and are
 never the record (no LISTEN/NOTIFY, ADR 0193): work another process
 wrote is found at the next poll.
 

@@ -76,6 +76,11 @@ describe("chats waiting for a machine (ADR 0258)", () => {
   let worker: { stop(): Promise<void> };
   const adapter = new RecordingAdapter();
   const allocations = new ExecutionAllocationsService(db);
+  const wakeups = new WorkWakeups();
+  let placementHints = 0;
+  wakeups.subscribe("placement", () => {
+    placementHints += 1;
+  });
 
   const waitOf = (sessionId: string) =>
     db
@@ -176,6 +181,7 @@ describe("chats waiting for a machine (ADR 0258)", () => {
         list: () => [agent],
       },
       nativeAgentCheckout: { resolve: () => ({ path: tmpDir, owned: false }) },
+      wakeups,
     });
     worker = sessions.startWorker({
       resolveIdentity: async (args) =>
@@ -389,6 +395,33 @@ describe("chats waiting for a machine (ADR 0258)", () => {
     });
     await waits.clear({ rootWorkloadIds: [rootWorkloadId] });
   });
+
+  it("hints that a chat began waiting, when it is created and when its turn finds no machine", async () => {
+    machines.state = "full";
+    const before = placementHints;
+    const chat = await sessions.chatForKey(alice, projectId, {
+      key: "pr-hint",
+      environment: "review",
+    });
+    // Created with no machine: its wait is recorded with it.
+    expect(placementHints).toBe(before + 1);
+    await send(alice, chat.sessionId, "Review this");
+    await retryNow(chat.sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Its retries refresh the wait: no more hints.
+    expect(placementHints).toBe(before + 1);
+    // Forgotten and found waiting again by its queued turn: a hint.
+    await db
+      .deleteFrom("placement_waits")
+      .where("root_workload_id", "=", chat.sessionId)
+      .execute();
+    await vi.waitFor(() => expect(placementHints).toBe(before + 2), {
+      timeout: 5_000,
+    });
+    await sessions.archive(alice, projectId, chat.sessionId, {
+      confirmStop: true,
+    });
+  }, 30_000);
 
   it("fails a waiting chat's turn when its Environment can no longer take it", async () => {
     machines.state = "full";

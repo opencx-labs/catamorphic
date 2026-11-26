@@ -80,7 +80,9 @@ reservation, then protects the others.
 a report falls under the floor (at most every 10 minutes): Environment
 images this machine pulled or built itself (a build carries its builder's
 label) that none of its sandboxes was made from for
-`WORK_IMAGE_RETENTION_HOURS` (24), that no container uses (Docker refuses
+`WORK_IMAGE_RETENTION_HOURS` (24) of the time the machine ran (a stretch
+it was stopped, ADR 0350, or down does not count, so a machine resumed
+after days still has its images), that no container uses (Docker refuses
 those) and that no other machine sharing the daemon claims, never the
 machine's own default image, one it found there, or an unlabeled build.
 Each machine claims an image it uses with a reference of its own, renewed
@@ -150,8 +152,8 @@ request controls could then make Work replace machines).
 A machine filling up stops taking work before it breaks what runs there,
 names the cause in each failure, and tells its project once. `storageMb`
 is a reservation on the container backend and local-process, and a limit
-on microsandbox. Images are rebuilt or pulled again after a day without
-use. Free space is up to 30 seconds old at admission, and workspaces
+on microsandbox. Images are rebuilt or pulled again after a day the
+machine ran without using them. Free space is up to 30 seconds old at admission, and workspaces
 admitted together share one measurement: the floor is the margin for
 both. Member machines (client runners) and the desktop report no
 disk and are unchanged.

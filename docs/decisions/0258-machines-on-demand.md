@@ -89,8 +89,10 @@ wherever KVM is usable and they cannot give setup its own network (ADR
 0257).
 
 **Cadence.** With demand rules, each replica looks at demand every 10 seconds
-with one statement and starts a pass when it differs from what its latest
-pass saw when it started, so demand that arrives during a pass, or while
+with one statement, and at once when work begins waiting for a machine on
+that replica (a `placement` hint, ADR 0229, then half a second apart for two
+seconds, since the wait may not be committed yet), and starts a pass when it
+differs from what its latest pass saw when it started, so demand that arrives during a pass, or while
 another replica holds the claim, starts another; idle machines go on the 60
 second pass. A rule's status counts its `queued` work.
 
