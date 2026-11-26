@@ -561,6 +561,17 @@ provide it take the work:
   only on a machine that isolates them; read the personal-environment skill
   before relying on one. A value that grants access to a company system
   belongs in a connection instead.
+- \`checkout\`: \`{ "command": "...", "timeoutMinutes": 15 }\`, how a new
+  workspace on a Work server gets the commit it stands on, for a repository
+  too large to take whole. Work makes the project folder a Git repository
+  whose remote \`work\` serves that commit, and runs the command there
+  with \`WORK_BASE\` naming it; when it ends, HEAD must be that commit.
+  One cone of a monorepo, without the other files' contents: \`git
+  sparse-checkout set --cone apps/web .work && git fetch --depth=1
+  --filter=blob:none work "$WORK_BASE" && git checkout --detach
+  FETCH_HEAD\`. The remote serves nothing once the command has ended, so
+  the command fetches everything the work reads. Without \`checkout\`,
+  Work fetches every file of the commit and no history.
 - \`setup\`: \`{ "command": "pnpm install --frozen-lockfile",
   "timeoutMinutes": 30 }\`, a shell command run in the project folder of
   every new workspace before its first turn, again when it changes, and

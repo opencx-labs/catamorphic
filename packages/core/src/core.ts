@@ -175,6 +175,7 @@ import { WebhooksService } from "./services/webhooks-service.js";
 import { WorkWakeups } from "./services/work-wakeups.js";
 import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
+import { WorkspaceCheckoutsService } from "./services/workspace-checkouts.js";
 
 export interface CatamorphicCoreConfig {
   agentCapabilities?: AgentCapabilityOptions;
@@ -295,8 +296,10 @@ export interface CatamorphicCoreConfig {
    * mounts the plugin's gateway routes. Sandboxes get Git configured for
    * `<gatewayUrl>/git/<alias>/`, harnesses reach models at
    * `<gatewayUrl>/model/<alias>/`, and code reaches HTTP APIs at
-   * `<gatewayUrl>/http/<alias>` (ADR 0212). Absent, Git, model and HTTP
-   * aliases are not offered to sandboxes.
+   * `<gatewayUrl>/http/<alias>` (ADR 0212). A new workspace fetches the
+   * commit it stands on from `<gatewayUrl>/checkout/<id>` (ADR 0353).
+   * Absent, Git, model and HTTP aliases are not offered to sandboxes, and
+   * a workspace's base is uploaded to it instead.
    */
   gatewayUrl?: (args: {
     projectId: string;
@@ -500,6 +503,8 @@ export class CatamorphicCore {
   readonly connectionGrants?: ConnectionCapabilityGrantsService;
   /** Git smart HTTP for sandboxes, authorized by session grants (ADR 0175). */
   readonly gitGateway?: GitGatewayService;
+  /** A workspace's base over Git, served by Work itself (ADR 0353). */
+  readonly workspaceCheckouts: WorkspaceCheckoutsService;
   /** Models through the gateway for sandbox harnesses (ADR 0180). */
   readonly modelGateway?: ModelGatewayService;
   /** HTTP APIs through the gateway for code in sandboxes (ADR 0212). */
@@ -923,6 +928,9 @@ export class CatamorphicCore {
           : {}),
       },
     );
+    this.workspaceCheckouts = new WorkspaceCheckoutsService(this.db, {
+      projectManager: this.projectManager,
+    });
     this.cacheFills = new CacheFillsService({
       db: this.db,
       projectManager: this.projectManager,
@@ -1490,6 +1498,7 @@ export class CatamorphicCore {
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
         workspaces: this.sessionWorkspaces,
+        checkouts: this.workspaceCheckouts,
         pullRequests: this.pullRequests,
         personalEnvironments: this.personalEnvironments,
         secrets: this.secrets,

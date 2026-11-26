@@ -227,6 +227,12 @@ tool (or `bun run --cwd .work check`, with the project's pinned public
 `@catamorphic/*` packages installed), then propose the change; it lands through
 a pull request like any other.
 
+A large monorepo need not be reviewed whole. Each review workspace fetches
+the pull request's commit from the Work server with Git, every file by
+default; add `checkout.command` to the `review` Environment to take less,
+such as the cones the reviewer reads
+([Setup and volumes](cluster-deployment.md#setup-and-volumes)).
+
 ## 5. Turn it on
 
 Someone with `automations:write`, in a role whose `environments` list

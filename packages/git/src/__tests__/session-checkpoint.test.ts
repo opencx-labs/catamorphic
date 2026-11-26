@@ -16,7 +16,11 @@ import {
   parseCheckpointMessage,
   sessionBranchName,
 } from "../session-checkpoint.js";
-import { buildSeedPack, seedPackInstallScript } from "../workspace-mirror.js";
+import {
+  buildSeedPack,
+  seedPackInstallScript,
+  seedPackParts,
+} from "../workspace-mirror.js";
 import {
   assertSavedTree,
   ReceivedPack,
@@ -520,10 +524,8 @@ describe("the commits a save brings (ADR 0344)", () => {
     const restored = path.join(dir, "restored");
     await fs.mkdir(restored);
     await git(restored, ["init", "-q", "-b", "main"]);
-    await fs.writeFile(
-      path.join(dir, "seed.b64"),
-      Buffer.from(pack).toString("base64"),
-    );
+    for (const part of seedPackParts({ pack, name: "seed.b64" }))
+      await fs.writeFile(path.join(dir, part.name), part.content);
     await execute(
       "bash",
       [

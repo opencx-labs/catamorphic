@@ -768,7 +768,10 @@ async function* fromReadableStream(
   }
 }
 
-function grantFromAuthorization(header: string | undefined): string | null {
+/** The grant a Git client sent: a bearer, or the password of basic auth. */
+export function grantFromAuthorization(
+  header: string | undefined,
+): string | null {
   if (!header) return null;
   const [scheme, value] = header.split(" ", 2);
   if (!value) return null;
@@ -816,7 +819,8 @@ function refusalResponse(error: unknown): GitGatewayResponse {
   return text(502, "The Git gateway could not complete this request");
 }
 
-async function* gunzip(
+/** A gzip-compressed request body, decoded as it arrives. */
+export async function* gunzip(
   source: AsyncIterable<Uint8Array>,
 ): AsyncIterable<Uint8Array> {
   const inflate = createGunzip();

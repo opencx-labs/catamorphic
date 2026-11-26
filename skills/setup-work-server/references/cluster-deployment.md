@@ -780,6 +780,30 @@ caches (ADR 0208):
 }
 ```
 
+- `checkout.command` says how a new workspace gets the commit it stands
+  on (ADR 0353). A sandbox fetches that commit from the Work server with
+  Git: Work makes the project folder a repository whose remote `work`
+  serves the commit, its tree and its files and nothing else, and runs the
+  command there with `WORK_BASE` naming it, before setup and before the
+  chat's secrets, grants or earlier work arrive. When it ends, `HEAD` must
+  be that commit, or the turn fails with what the command printed. Without
+  one, Work runs `git fetch --depth=1 work "$WORK_BASE" && git checkout
+  --force --detach FETCH_HEAD`: every file, no history. A large monorepo
+  takes less, for example one cone without the other files' contents:
+  `"checkout": { "command": "git sparse-checkout set --cone apps/web .work
+  && git fetch --depth=1 --filter=blob:none work \"$WORK_BASE\" && git
+  checkout --detach FETCH_HEAD", "timeoutMinutes": 15 }` (15 minutes by
+  default, 240 at most). The token that lets the sandbox fetch lives in
+  the command's environment only and ends with it, so a checkout that left
+  files out cannot read them later: the command fetches what the work
+  needs, and Git says so when something asks for more. It runs again in a
+  workspace rebuilt after idle release, and when the base moves, where Git
+  sends only what the checkout lacks. The chat's own commits and uncommitted
+  files come back on top of it afterwards. Keep `.work` in a sparse cone.
+  The image's Git must be 2.31 or newer, which reads the token from the
+  command's environment. A sandbox that cannot fetch (an older Git, a
+  gateway it does not reach) gets its base uploaded instead when the
+  Environment names no command, and the server's log says why.
 - `setup.command` is a shell command run in the project folder of every
   new workspace before its first turn, once the chat's secrets and the
   member's personal files are in place, again when the command changes,

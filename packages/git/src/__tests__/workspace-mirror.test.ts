@@ -15,6 +15,7 @@ import {
   mirrorChangedFiles,
   parseWorkspaceRef,
   seedPackInstallScript,
+  seedPackParts,
 } from "../workspace-mirror.js";
 
 const execute = promisify(execFile);
@@ -258,10 +259,8 @@ describe("workspace refs (ADR 0178)", () => {
     const sandbox = path.join(dir, "sandbox");
     await fs.mkdir(sandbox);
     await nativeGit(sandbox, ["init", "-q", "-b", "main"]);
-    await fs.writeFile(
-      path.join(dir, "seed.b64"),
-      Buffer.from(pack).toString("base64"),
-    );
+    for (const part of seedPackParts({ pack, name: "seed.b64" }))
+      await fs.writeFile(path.join(dir, part.name), part.content);
     await execute(
       "bash",
       [
@@ -276,6 +275,8 @@ describe("workspace refs (ADR 0178)", () => {
     );
     const log = await nativeGit(sandbox, ["log", "--format=%s"]);
     expect(log.trim().split("\n")).toEqual(["Session work", "Base"]);
-    await expect(fs.access(path.join(dir, "seed.b64"))).rejects.toThrow();
+    await expect(
+      fs.access(path.join(dir, "seed.b64.000000")),
+    ).rejects.toThrow();
   });
 });

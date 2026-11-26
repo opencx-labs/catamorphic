@@ -123,6 +123,16 @@ const NetworkSchema = z.discriminatedUnion("egress", [
   z.strictObject({ egress: z.literal("allowlist"), allow: EgressAllowSchema }),
 ]);
 
+/**
+ * How a new workspace gets the commit it stands on (ADR 0353): a shell
+ * command run in its empty checkout, a Git repository whose remote `work`
+ * serves exactly that commit (`$WORK_BASE`).
+ */
+const CheckoutSchema = z.strictObject({
+  command: z.string().min(1).max(16_384),
+  timeoutMinutes: z.number().int().positive().max(240).optional(),
+});
+
 /** An Environment's workspace setup (ADRs 0208, 0257, 0324). */
 const SetupSchema = z
   .strictObject({
@@ -305,6 +315,8 @@ const ProjectEnvironmentDefinitionSchema = z
     personalCredentials: z.boolean().optional(),
     /** Project secrets this Environment's sandboxes receive (ADR 0206). */
     secrets: z.array(SecretNameSchema).max(200).optional(),
+    /** How a new workspace fetches its base (ADR 0353). */
+    checkout: CheckoutSchema.optional(),
     /** Run in every new workspace's project folder (ADRs 0208, 0257). */
     setup: SetupSchema.optional(),
     /** Directories kept on the machine for each owner (ADR 0208). */
@@ -469,6 +481,16 @@ export const DEFAULT_IDLE_RELEASE_MINUTES = 30;
 /** Minutes a workspace's setup may run unless its Environment says otherwise (ADR 0208). */
 export const DEFAULT_SETUP_TIMEOUT_MINUTES = 30;
 
+/** Minutes a workspace's checkout may run unless its Environment says otherwise (ADR 0353). */
+export const DEFAULT_CHECKOUT_TIMEOUT_MINUTES = 15;
+
+/**
+ * What fetches a workspace's base when its Environment names no command
+ * (ADR 0353): the commit and its whole tree, with no history before it.
+ */
+export const DEFAULT_CHECKOUT_COMMAND =
+  'git fetch --quiet --no-tags --depth=1 work "$WORK_BASE" && git checkout --quiet --force --detach FETCH_HEAD';
+
 /** The image an Environment declares, before a Dockerfile is read. */
 export type EnvironmentImage =
   | { kind: "oci"; reference: string }
@@ -494,6 +516,8 @@ export interface ProjectEnvironmentDefinition {
   personalCredentials?: boolean;
   /** Project secrets this Environment's sandboxes receive (ADR 0206). */
   secrets?: readonly string[];
+  /** How a new workspace fetches its base (ADR 0353). */
+  checkout?: EnvironmentCheckout;
   /** Run in every new workspace's project folder (ADRs 0208, 0257). */
   setup?: EnvironmentSetup;
   /** Directories kept on the machine for each owner (ADR 0208). */
@@ -522,6 +546,21 @@ export interface EnvironmentCommands {
   connections?: readonly string[];
   /** The agent container's own limits; 1 CPU and 2 GiB by default. */
   agentResources?: { cpuMillis?: number; memoryMb?: number };
+}
+
+/**
+ * How an Environment's workspaces get the commit they stand on (ADR
+ * 0353). Work makes the checkout a Git repository with a remote named
+ * `work`, which serves that commit and its tree and nothing else, and runs
+ * `command` there with `WORK_BASE` naming the commit, before any setup and
+ * before the workspace holds anything of a session's. When the command
+ * ends, HEAD must be that commit; how much of it arrived (every file, a
+ * sparse cone, no blobs until they are read) is the command's to say.
+ * Without one, {@link DEFAULT_CHECKOUT_COMMAND} fetches it whole.
+ */
+export interface EnvironmentCheckout {
+  command: string;
+  timeoutMinutes?: number;
 }
 
 /**

@@ -305,7 +305,12 @@ function snapshotScript(known: readonly string[] | undefined): string {
     "set -e",
     "git_dir=$(git rev-parse --git-dir)",
     'export GIT_INDEX_FILE="$git_dir/work-sync-index"',
-    'if [ ! -f "$GIT_INDEX_FILE" ] && [ -f "$git_dir/index" ]; then cp "$git_dir/index" "$GIT_INDEX_FILE"; fi',
+    // The copy keeps the index's time (`-p`). Git looks inside a file
+    // whose size and whole-second times match its index entry only while
+    // the index is no newer than the file; a copy made a second later
+    // would call an edit of the same size, made in the second the
+    // checkout was written, unchanged for good.
+    'if [ ! -f "$GIT_INDEX_FILE" ] && [ -f "$git_dir/index" ]; then cp -p "$git_dir/index" "$GIT_INDEX_FILE"; fi',
     'base=$(git rev-parse -q --verify "refs/work/synced^{tree}" || git rev-parse -q --verify "HEAD^{tree}" || git hash-object -t tree /dev/null)',
     "git add -A",
     "tree=$(git write-tree)",

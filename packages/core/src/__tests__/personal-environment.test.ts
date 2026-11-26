@@ -323,6 +323,36 @@ describe("personal files in a sandbox (ADR 0184)", () => {
     expect(staged.trim()).toBe("app.ts");
   });
 
+  it("saves an edit of the same size made in the second the index was written", async () => {
+    const git = async (...args: string[]) =>
+      (
+        await nativeGit(project(), [
+          "-c",
+          "user.name=Agent",
+          "-c",
+          "user.email=agent@example.test",
+          ...args,
+        ])
+      ).trim();
+    // Just after a second starts, so that what follows shares it: the
+    // index is written, as a checkout writes it, and a file it holds is
+    // edited to the same size.
+    await new Promise((resolve) =>
+      setTimeout(resolve, 1020 - (Date.now() % 1000)),
+    );
+    await fs.writeFile(path.join(project(), "app.ts"), "abc\n");
+    await git("add", "-A");
+    const synced = await git("commit-tree", await git("write-tree"), "-m", "s");
+    await git("update-ref", "refs/work/synced", synced);
+    await fs.writeFile(path.join(project(), "app.ts"), "xyz\n");
+    // Git tells such a file from its index by looking inside it, and only
+    // while the index is no newer than the file. The snapshot reads a copy
+    // of the index made later, here a second later: it keeps the index's
+    // time, or this edit would never be saved.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(await snapshot()).toEqual([{ path: "app.ts", kind: "file" }]);
+  });
+
   it("keeps the agent's edits, replaces changed files, and removes dropped ones", async () => {
     const deliver = (files: Record<string, string>) =>
       deliverPersonalEnvironment({

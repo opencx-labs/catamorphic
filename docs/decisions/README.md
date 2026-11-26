@@ -357,3 +357,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0350](0350-machines-stop-and-resume.md) | Machines stop and resume; installation is a recipe | Accepted (amends 0100, 0173, 0204, 0205) |
 | [0351](0351-a-shared-subsession-stands-on-its-workspace-and-waits-end-in-time.md) | A shared subsession stands on its workspace, and a tool's wait ends before the agent's client gives up | Proposed (amends 0241, 0264, 0271, 0322, 0323) |
 | [0352](0352-an-opened-request-is-a-session-event-automations-answer-unattended-approvals.md) | An opened request is a session event, and a project's automations answer an unattended chat's approvals | Proposed (amends 0054, 0138, 0176, 0181) |
+| [0353](0353-a-workspaces-base-arrives-by-git-and-the-environment-says-how.md) | A workspace's base arrives by Git, and the Environment says how it is checked out | Proposed (amends 0178, 0208, 0257, 0343, 0344) |

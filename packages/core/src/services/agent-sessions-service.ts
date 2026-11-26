@@ -207,6 +207,7 @@ import type {
   ExecutionAllocationsService,
 } from "./execution-allocations-service.js";
 import {
+  type AdmittedCheckout,
   type AdmittedSetup,
   admissionPolicy,
   EnvironmentAccessDeniedError,
@@ -238,7 +239,11 @@ import {
   readProgramFile,
   withProgram,
 } from "./program-reader.js";
-import { DEFAULT_SETUP_TIMEOUT_MINUTES } from "./project-environments-service.js";
+import {
+  DEFAULT_CHECKOUT_COMMAND,
+  DEFAULT_CHECKOUT_TIMEOUT_MINUTES,
+  DEFAULT_SETUP_TIMEOUT_MINUTES,
+} from "./project-environments-service.js";
 import { requireTenantProject } from "./projects-service.js";
 import {
   NothingToProposeError,
@@ -252,6 +257,7 @@ import {
   withReplicaClaim,
 } from "./replica-claims.js";
 import {
+  checkoutSandboxBase,
   configureSandboxGateway,
   removeSandboxGateway,
   removeSessionCredentials,
@@ -401,6 +407,7 @@ import { UserNotificationsService } from "./user-notifications-service.js";
 import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
 import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
+import type { WorkspaceCheckoutsService } from "./workspace-checkouts.js";
 import {
   recordWorkspaceChange,
   recordWorkspaceGone,
@@ -539,6 +546,8 @@ interface AgentExecutionRuntime {
   signInHome?: string;
   /** The Environment's setup for new workspaces (ADRs 0208, 0257). */
   setup?: AdmittedSetup;
+  /** How the Environment's workspaces fetch their base (ADR 0353). */
+  checkout?: AdmittedCheckout;
   /** The Allocation the workspace belongs to. */
   allocation?: ExecutionAllocation;
   /**
@@ -1283,6 +1292,11 @@ interface AgentSessionsDeps {
   }) => string | undefined;
   /** Workspaces at a ref of the project's linked remote (ADR 0178). */
   workspaces?: SessionWorkspaces;
+  /**
+   * Serves a workspace's base over Git (ADR 0353). Absent, or without a
+   * gateway sandboxes reach, a base is uploaded with the session's work.
+   */
+  checkouts?: WorkspaceCheckoutsService;
   /** Opens pull requests from a chat's branch (ADR 0345). */
   pullRequests?: PullRequestsService;
   /**
@@ -1554,6 +1568,7 @@ export class AgentSessionsService {
   private readonly connectionGrants?: ConnectionCapabilityGrantsService;
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
   private readonly workspaces?: SessionWorkspaces;
+  private readonly checkouts?: WorkspaceCheckoutsService;
   private readonly pullRequests?: PullRequestsService;
   private readonly sandboxGateway?: AgentSessionsDeps["sandboxGateway"];
   private readonly personalEnvironments?: PersonalEnvironmentService;
@@ -2080,6 +2095,7 @@ export class AgentSessionsService {
     this.connectionMcpUrl = deps.connectionMcpUrl;
     this.workspaces = deps.workspaces;
     this.pullRequests = deps.pullRequests;
+    this.checkouts = deps.checkouts;
     this.sandboxGateway = deps.sandboxGateway;
     this.personalEnvironments = deps.personalEnvironments;
     this.secrets = deps.secrets;
@@ -7055,6 +7071,7 @@ export class AgentSessionsService {
           provider: runtime.provider,
           sandboxProviderId,
           afterSetup: widened !== undefined,
+          ...(runtime.checkout ? { checkout: runtime.checkout } : {}),
         });
         if (agent.signIn) {
           // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
@@ -8650,6 +8667,122 @@ export class AgentSessionsService {
   }
 
   /**
+   * Where a session's sandbox fetches its base from (ADR 0353):
+   * `<gateway>/checkout`, when this host serves checkouts and its
+   * sandboxes reach its gateway.
+   */
+  private checkoutGateway(input: {
+    projectId: string;
+    sessionId: string;
+  }): string | undefined {
+    if (!this.checkouts) return undefined;
+    const gateway = this.sandboxGateway?.url(input)?.replace(/\/+$/, "");
+    return gateway ? `${gateway}/checkout` : undefined;
+  }
+
+  /**
+   * Whether a workspace's base is fetched by its sandbox (ADR 0353) rather
+   * than uploaded with the session's work. An Environment that names a
+   * checkout command needs it: refused, saying why, where the host cannot
+   * serve one.
+   */
+  private fetchesBase(input: {
+    projectId: string;
+    sessionId: string;
+    checkout?: AdmittedCheckout;
+  }): boolean {
+    if (this.checkoutGateway(input)) return true;
+    if (input.checkout)
+      throw new Error(
+        "This Environment names a checkout command (`checkout` in .work/project.json), and this host serves its sandboxes no gateway to fetch from. Remove `checkout` and Work uploads the base instead.",
+      );
+    return false;
+  }
+
+  /**
+   * Bring a workspace's base into its sandbox with the Environment's
+   * checkout command, or Work's own (ADR 0353): the commit is served from
+   * the session's copy for as long as the command runs, and no longer.
+   * Answers whether the sandbox holds its base now. A command the
+   * Environment names decides that alone, and its failure is the turn's.
+   * Work's own fetch failing (a host that names a gateway its sandboxes do
+   * not reach) answers false, and the base is uploaded as it is where no
+   * gateway is served.
+   */
+  private async fetchSandboxBase(input: {
+    tenantId: string;
+    projectId: string;
+    /** The session whose copy holds the base (ADR 0322). */
+    sessionId: string;
+    base: string;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    checkout?: AdmittedCheckout;
+  }): Promise<boolean> {
+    const gateway = this.checkoutGateway(input);
+    if (!this.checkouts || !gateway)
+      throw new Error("This host serves no checkouts");
+    const timeoutSeconds =
+      (input.checkout?.timeoutMinutes ?? DEFAULT_CHECKOUT_TIMEOUT_MINUTES) * 60;
+    const issued = await this.checkouts.issue({
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      commit: input.base,
+      // A little past the command: its last request may still be answered.
+      ttlSeconds: timeoutSeconds + 60,
+    });
+    try {
+      await withSpan(
+        {
+          tracer,
+          name: "agent.session.workspace.checkout",
+          attributes: {
+            "catamorphic.tenant.id": input.tenantId,
+            "catamorphic.project.id": input.projectId,
+            "catamorphic.agent.session.id": input.sessionId,
+            // Whether the Environment names the command, or Work's runs.
+            "catamorphic.workspace.checkout.named": Boolean(input.checkout),
+          },
+        },
+        () =>
+          checkoutSandboxBase({
+            provider: input.provider,
+            sandboxId: input.sandboxProviderId,
+            projectDir: this.projectDir(input.provider),
+            base: input.base,
+            checkout: {
+              url: `${gateway}/${issued.id}`,
+              token: issued.token,
+              command: input.checkout?.command ?? DEFAULT_CHECKOUT_COMMAND,
+              timeoutSeconds,
+            },
+          }),
+      );
+      return true;
+    } catch (error) {
+      if (input.checkout) throw error;
+      console.warn(
+        "[catamorphic] A sandbox could not fetch its base from the gateway; uploading it instead",
+        {
+          sessionId: input.sessionId,
+          reason: (error instanceof Error ? error.message : String(error))
+            .slice(-500)
+            .trim(),
+        },
+      );
+      return false;
+    } finally {
+      // Whatever the command did, nothing fetches with its token again.
+      await this.checkouts
+        .revoke({ id: issued.id })
+        .catch((error: unknown) =>
+          console.warn("[catamorphic] Could not end a checkout", error),
+        );
+    }
+  }
+
+  /**
    * Git in a sandbox turn (ADRs 0175, 0178): seed the repository at the
    * workspace base when it is not there yet, and write the session's
    * gateway grants and Git configuration.
@@ -8665,6 +8798,8 @@ export class AgentSessionsService {
     afterSetup?: boolean;
     /** Seed the checkout only: no grant or Git configuration yet (ADR 0324). */
     seedOnly?: boolean;
+    /** How the Environment's workspaces fetch their base (ADR 0353). */
+    checkout?: AdmittedCheckout;
   }): Promise<readonly SandboxModelGateway[]> {
     const row = await this.db
       .selectFrom("agent_sessions")
@@ -8698,6 +8833,26 @@ export class AgentSessionsService {
         branch: work.branch,
         originUrl: await this.linkedRemoteUrl(input.identity, input.projectId),
         ...(input.afterSetup ? { afterSetup: true } : {}),
+        // The base is fetched where the sandbox can reach Work (ADR 0353);
+        // only what the session added to it is uploaded.
+        ...(this.fetchesBase({
+          projectId: input.projectId,
+          sessionId: copyId,
+          checkout: input.checkout,
+        })
+          ? {
+              fetchBase: () =>
+                this.fetchSandboxBase({
+                  tenantId: input.identity.tenantId,
+                  projectId: input.projectId,
+                  sessionId: copyId,
+                  base: base.commit,
+                  provider: input.provider,
+                  sandboxProviderId: input.sandboxProviderId,
+                  checkout: input.checkout,
+                }),
+            }
+          : {}),
       });
     } finally {
       await copy.dispose();
@@ -9536,21 +9691,41 @@ export class AgentSessionsService {
     const { identity, projectId, session, provider } = input;
     // The workspace session's copy holds the base (ADR 0322): a shared
     // subsession whose turn makes the workspace has none of its own.
-    const copy = await this.projectManager.openSession({
-      tenantId: identity.tenantId,
-      projectId,
-      sessionId: workspaceCopyId(session),
-    });
-    try {
-      await seedSandboxBase({
-        provider,
-        sandboxId: input.sandboxProviderId,
-        projectDir: this.projectDir(provider),
-        sessionCopyPath: copy.repoPath,
+    const copyId = workspaceCopyId(session);
+    // Fetched while the sandbox still reaches only the gateway, with a
+    // token that ends before its network widens (ADR 0353).
+    const fetched =
+      this.fetchesBase({
+        projectId,
+        sessionId: copyId,
+        checkout: input.runtime.checkout,
+      }) &&
+      (await this.fetchSandboxBase({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId: copyId,
         base: input.base,
+        provider,
+        sandboxProviderId: input.sandboxProviderId,
+        checkout: input.runtime.checkout,
+      }));
+    if (!fetched) {
+      const copy = await this.projectManager.openSession({
+        tenantId: identity.tenantId,
+        projectId,
+        sessionId: copyId,
       });
-    } finally {
-      await copy.dispose();
+      try {
+        await seedSandboxBase({
+          provider,
+          sandboxId: input.sandboxProviderId,
+          projectDir: this.projectDir(provider),
+          sessionCopyPath: copy.repoPath,
+          base: input.base,
+        });
+      } finally {
+        await copy.dispose();
+      }
     }
     await removeSessionCredentials({
       provider,
@@ -9651,6 +9826,7 @@ export class AgentSessionsService {
       provider,
       sandboxProviderId: input.sandboxProviderId,
       seedOnly: true,
+      ...(input.runtime.checkout ? { checkout: input.runtime.checkout } : {}),
     });
     await removeSessionCredentials({
       provider,
@@ -12997,6 +13173,7 @@ export class AgentSessionsService {
                 sessionId,
                 provider: runtime.provider,
                 sandboxProviderId: workspace.sandboxProviderId,
+                ...(runtime.checkout ? { checkout: runtime.checkout } : {}),
               });
               // The person opening it may act on the chat as its owner
               // does, so the workspace starts with the Environment's
@@ -15529,6 +15706,7 @@ export class AgentSessionsService {
       allocation,
       ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
       ...(admitted.setup ? { setup: admitted.setup } : {}),
+      ...(admitted.checkout ? { checkout: admitted.checkout } : {}),
       // A managed machine's Allocation only stops its sandbox; the
       // machine's own provider destroys it (ADR 0257).
       destroySandbox: (sandboxId) =>
