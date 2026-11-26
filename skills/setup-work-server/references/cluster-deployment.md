@@ -614,7 +614,9 @@ heard over 5 minutes ago (dated on arrival, not by the machine's clock) does
 not hold a machine back.
 
 The machine removes what Work left that nothing used for
-`WORK_IMAGE_RETENTION_HOURS`, hourly and at once while under its floor:
+`WORK_IMAGE_RETENTION_HOURS` of the time it ran, hourly and at once while
+under its floor (a stretch it was stopped or down does not count, so a
+machine resumed after days still has its images):
 images it pulled or built itself that no container uses and no other machine
 sharing the Docker daemon still claims (a claim is a tag each machine renews
 daily while it uses the image, ignored after a week; never its default image, one it

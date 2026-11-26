@@ -117,7 +117,8 @@ export interface WorkExecutionSettings {
   /**
    * Hours an image Work built or pulled, and the Docker data inside
    * sandboxes, may go unused before the machine removes it (ADR 0336,
-   * `WORK_IMAGE_RETENTION_HOURS`, default 24).
+   * `WORK_IMAGE_RETENTION_HOURS`, default 24). Hours the machine ran: the
+   * time it was stopped does not count (ADR 0350).
    */
   imageRetentionHours: number;
 }

@@ -126,7 +126,7 @@ import {
 import { registerShareRoutes } from "./shares/share-routes.js";
 import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
-import { startDiskCare } from "./workers/disk-care.js";
+import { RUNNING_TIME_FILE, startDiskCare } from "./workers/disk-care.js";
 import { HarnessSignIns } from "./workers/harness-sign-ins.js";
 import { registerMemberMachineRoutes } from "./workers/member-machine-routes.js";
 import { MemberMachines } from "./workers/member-machines.js";
@@ -430,6 +430,7 @@ async function createWorkServerInner(
       ? { criticalMb: execution.diskCriticalMb }
       : {}),
     graceMs: execution.imageRetentionMs,
+    runningFile: path.join(data, RUNNING_TIME_FILE),
     log,
   });
   disposers.push(async () => diskCare.stop());
