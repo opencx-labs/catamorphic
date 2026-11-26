@@ -434,7 +434,7 @@ export const SESSION_OPERATIONS = {
   session_read: define("session_read", {
     title: "Read a chat",
     description:
-      "Use this to look at a chat now, without waiting: where it stands (state), what its agent asks (requests), its last reply, its typed results and the pull requests it opened. include adds more to the answer: transcript (the newest limit messages, oldest first, ending at through when given), results (every result, filtered by name, turnId, afterInput, family, order), usage (model tokens and cost), attempts (of the turn named by turnId), or metadata. Next: session_wait if it is still working.",
+      "Use this to look at a chat now, without waiting: where it stands (state), what its agent asks (requests), its last reply, its typed results and the pull requests it opened. include adds more to the answer: transcript (the newest limit messages, oldest first, ending at through when given), results (every result, filtered by name, turnId, afterInput, family, order), usage (model tokens and cost), attempts (of the turn named by turnId, each with the phases of its preparation and how long they took), or metadata. Next: session_wait if it is still working.",
     input: chat({
       ...target,
       include: z.array(z.enum(READ_SECTIONS)).max(5).optional(),
@@ -464,7 +464,8 @@ export const SESSION_OPERATIONS = {
       attempts: {
         type: "array",
         items: { type: "object" },
-        description: "With include attempts",
+        description:
+          "With include attempts: id, status, error, diagnostics, and phases (how long each part of its preparation took: phase, startedAt, endedAt)",
       },
       metadata: { type: "object", description: "With include metadata" },
     }),

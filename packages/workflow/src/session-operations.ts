@@ -187,6 +187,27 @@ export interface SessionTurnAttempt {
    * Null once the attempt completed, or when there was none.
    */
   diagnostics: { runner: string; harness: string } | null;
+  /**
+   * How long each part of its preparation took (ADR 0354), oldest first,
+   * each where it applied. Time between phases is Work's own preparation.
+   */
+  phases: SessionAttemptPhase[];
+}
+/** One phase of an attempt's preparation (ADR 0354). */
+export interface SessionAttemptPhase {
+  /**
+   * `machine.wait` (the chat waited for a machine), `workspace.wait`
+   * (another chat's turn was making or setting up the workspace they
+   * share), `sandbox.create` (its image pulled or built too),
+   * `sandbox.start`, `workspace.checkout` (the base commit),
+   * `workspace.restore` (the chat's saved work), `setup.environment`,
+   * `setup.workflow`, `setup.personal`, `harness.start`, or
+   * `harness.first-output` (until the agent's first item).
+   */
+  phase: string;
+  /** ISO timestamps; `endedAt` is null while the phase runs. */
+  startedAt: string;
+  endedAt: string | null;
 }
 /**
  * Where a chat's workspace starts (ADR 0178): a branch, tag, commit, or

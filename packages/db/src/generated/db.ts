@@ -220,6 +220,7 @@ export interface AgentTurnAttempts {
   id: Generated<string>;
   native_turn_ref: Json | null;
   ordinal: number;
+  phases: Generated<Json>;
   progress_at: Timestamp | null;
   provider_started_at: Timestamp | null;
   provider_thread_id: string | null;
@@ -628,6 +629,7 @@ export interface ExecutionAllocations {
   setup_outcome: Json | null;
   status: Generated<string>;
   tenant_id: string;
+  waited_since: Timestamp | null;
   worker_node_id: string | null;
   workload_kind: string;
 }

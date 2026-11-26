@@ -36,7 +36,13 @@ import {
   withTelemetryContext,
 } from "@catamorphic/otel";
 import type { Span } from "@opentelemetry/api";
-import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import {
+  type Kysely,
+  type RawBuilder,
+  type Selectable,
+  sql,
+  type Transaction,
+} from "kysely";
 import type { Identity } from "../../identity.js";
 import {
   type HeldTurnLease,
@@ -48,6 +54,7 @@ import {
   ExecutorNotConnectedError,
   RemoteSandboxUnknownError,
 } from "../remote-operations.js";
+import { AttemptPhases, phasesEnded, phasesStarted } from "./attempt-phases.js";
 import { buildContextHandoff } from "./context-handoff.js";
 import { NativeStateStore } from "./native-state.js";
 import {
@@ -120,6 +127,11 @@ export interface RunnerState {
    * attempt that never did starts that input over (ADR 0240).
    */
   started?: boolean;
+  /**
+   * The harness reported its first item, or its end: the attempt's
+   * `harness.first-output` phase ended (ADR 0354).
+   */
+  output?: boolean;
   /**
    * Process groups of its own the harness started (ADR 0333): killed with
    * the runner when a restart ends it.
@@ -1212,6 +1224,11 @@ export class TurnEngine {
       thread: binding.binding,
       input,
     };
+    // Starting the runner and its harness is a phase of the attempt (ADR
+    // 0354): the runner's hello ends it.
+    await new AttemptPhases({ db, attemptId: attempt.id }).start(
+      "harness.start",
+    );
     const channel = await prepared.launch();
     local.channel = channel;
     local.mask = new SecretMask(prepared.secretValues ?? {});
@@ -2699,6 +2716,31 @@ export class TurnEngine {
           consumed: [...(runner.consumed ?? []), ...ingested.consumed],
         };
       if (ingested.started) runner = { ...runner, started: true };
+      // The attempt's last two phases (ADR 0354): its harness has its start
+      // once the runner said hello, and its first output is its first item,
+      // or its end when it reported none.
+      const at = new Date().toISOString();
+      let phases: RawBuilder<Json> | undefined;
+      if (input.runner.hello === null && runner.hello !== null)
+        phases = phasesStarted({
+          from: phasesEnded({ phase: "harness.start", at }),
+          phase: "harness.first-output",
+          at,
+        });
+      if (
+        !runner.output &&
+        events.some(
+          (event) =>
+            event.type.startsWith("item.") || event.type === "turn.completed",
+        )
+      ) {
+        runner = { ...runner, output: true };
+        phases = phasesEnded({
+          phase: "harness.first-output",
+          at,
+          ...(phases ? { from: phases } : {}),
+        });
+      }
       const groups = processGroups(runner.groups, events);
       if (groups !== runner.groups) runner = { ...runner, groups };
       let turn = ingested.turn;
@@ -2923,6 +2965,7 @@ export class TurnEngine {
             ? { progress_at: sql<Date>`now()`, stalled_at: null }
             : {}),
           ...(logged ? { diagnostics: diagnosticsWrite(logged) } : {}),
+          ...(phases ? { phases } : {}),
         })
         .where("id", "=", attempt.id)
         .execute();

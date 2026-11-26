@@ -7,6 +7,7 @@ import {
 } from "@catamorphic/sandbox";
 import { SESSION_DIRECTORY } from "./sandbox-git.js";
 import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
+import { type PhaseTimer, UNTIMED } from "./sessions/attempt-phases.js";
 
 /*
  * Workspace setup (ADR 0208): an Environment's `setup` command, then the
@@ -55,12 +56,25 @@ const NOTHING_RECORDED: SetupRecord = {
 /** One part of a workspace's setup. */
 export type SetupPart = "environment" | "workflow" | "personal";
 
-/** Why a setup workflow runs (ADR 0324). */
-export type SetupWorkflowReason =
-  | "created"
-  | "rebuilt"
-  | "base-moved"
-  | "changed";
+/**
+ * Why a setup runs, as its workflow (ADR 0324) and its commands (ADR 0354)
+ * hear it: the workspace is new (`created`), was made again (`rebuilt`),
+ * stands on another base (`base-moved`), or its setup changed (`changed`).
+ */
+export type SetupReason = "created" | "rebuilt" | "base-moved" | "changed";
+
+/** Why a setup runs, and the base this sandbox last set up on, if any. */
+export interface SetupCause {
+  reason: SetupReason;
+  previousBase?: string;
+}
+
+/** The variables a setup's commands read (ADR 0354). */
+export const SETUP_VARIABLES = {
+  base: "WORK_BASE",
+  previousBase: "WORK_PREVIOUS_BASE",
+  reason: "WORK_SETUP_REASON",
+} as const;
 
 /**
  * What the Environment's part is fingerprinted by: its command, and the
@@ -221,6 +235,59 @@ export function setupClaimWaitMs(input: {
   return (input.timeoutMinutes * parts + 5) * 60_000;
 }
 
+/**
+ * Why `plan` runs (ADR 0354), from what the sandbox recorded. It is about
+ * the Environment's part when that runs, else the owner's own. With that
+ * part not set up here yet (nothing recorded, or an earlier try that did
+ * not finish), the reason is why the workspace is new, and there is no
+ * earlier base; otherwise it is what changed since, and the base is the
+ * one its last setup here ran on.
+ */
+export function setupCause(input: {
+  plan: WorkspaceSetupPlan;
+  recorded: SetupRecord | null;
+  /** The sandbox replaced an earlier workspace of the chat. */
+  rebuilt: boolean;
+  /** This preparation moved the workspace's base. */
+  moved: boolean;
+}): SetupCause {
+  const { plan, recorded } = input;
+  const done = !recorded
+    ? NONE
+    : plan.environment || plan.workflow
+      ? recorded.environment
+      : recorded.personal;
+  if (!recorded || done === NONE)
+    return {
+      reason: input.moved
+        ? "base-moved"
+        : input.rebuilt
+          ? "rebuilt"
+          : "created",
+    };
+  return {
+    reason: recorded.base !== plan.record.base ? "base-moved" : "changed",
+    ...(recorded.base !== NONE ? { previousBase: recorded.base } : {}),
+  };
+}
+
+/**
+ * What a setup's commands are told (ADR 0354), by variable: the commit the
+ * workspace stands on, the one this sandbox's last setup ran on, and why
+ * this one runs. One with no value is unset for them.
+ */
+export function setupVariables(input: {
+  plan: WorkspaceSetupPlan;
+  cause: SetupCause;
+}): Record<string, string | undefined> {
+  const { base } = input.plan.record;
+  return {
+    [SETUP_VARIABLES.base]: base === NONE ? undefined : base,
+    [SETUP_VARIABLES.previousBase]: input.cause.previousBase,
+    [SETUP_VARIABLES.reason]: input.cause.reason,
+  };
+}
+
 /** The parts a plan runs, in order. */
 export function planParts(plan: WorkspaceSetupPlan): SetupPart[] {
   return [
@@ -256,12 +323,14 @@ const PART_LABELS: Record<SetupPart, string> = {
 /**
  * The script one setup runs from the project folder (POSIX shell, run
  * with bash): output appended to the log, the session's secrets loaded
- * when present (ADR 0206) unless `loadSecrets` is false, then each of
- * `parts` (the plan's, by default) with `bash -e` so its first failing
- * command stops it, the record written after each part that succeeded.
+ * when present (ADR 0206) unless `loadSecrets` is false, what the commands
+ * run on and why exported (ADR 0354), then each of `parts` (the plan's, by
+ * default) with `bash -e` so its first failing command stops it, the
+ * record written after each part that succeeded.
  */
 export function workspaceSetupScript(input: {
   plan: WorkspaceSetupPlan;
+  cause: SetupCause;
   parts?: readonly SetupPart[];
   loadSecrets?: boolean;
 }): string {
@@ -287,6 +356,11 @@ export function workspaceSetupScript(input: {
     // The Environment's secrets (ADR 0206) and the gateway's variables
     // (ADR 0212), from the project folder where the script starts.
     ...(input.loadSecrets === false ? [] : [sandboxSecretsPrelude()]),
+    ...Object.entries(setupVariables(input)).map(([name, value]) =>
+      value === undefined
+        ? `unset ${name}`
+        : `export ${name}=${shellQuote(value)}`,
+    ),
     "work_part() {",
     "  printf '\\n-- %s\\n' \"$1\"",
     '  bash -e "$2"',
@@ -440,6 +514,11 @@ export type SetupWorkflowOutcome =
  * (the secrets the setup names). Its workflow runs narrow; its commands
  * `in: "setup"` widen the sandbox for themselves. The owner's part is a
  * later call's.
+ *
+ * Each command hears what it runs on and why (ADR 0354): `WORK_BASE`,
+ * `WORK_PREVIOUS_BASE` when this sandbox set up before, and
+ * `WORK_SETUP_REASON`, the reason the workflow is given. Each part runs as
+ * a script of its own and is timed as a phase of the attempt, with `phases`.
  */
 export async function runWorkspaceSetup(input: {
   provider: SandboxProvider;
@@ -458,17 +537,17 @@ export async function runWorkspaceSetup(input: {
    * (the secrets the setup names), on the sandbox's own network.
    */
   isolated?: { env: Record<string, string> };
+  /** The sandbox replaced an earlier workspace of the chat. */
+  rebuilt?: boolean;
+  /** This preparation moved the workspace's base. */
+  moved?: boolean;
   /** The Environment's setup workflow (ADR 0324). */
   workflow?: {
     name: string;
-    /** The sandbox replaced an earlier workspace of the chat. */
-    rebuilt: boolean;
-    /** This preparation moved the workspace's base. */
-    moved: boolean;
-    run: (args: {
-      reason: SetupWorkflowReason;
-    }) => Promise<SetupWorkflowOutcome>;
+    run: (args: { reason: SetupReason }) => Promise<SetupWorkflowOutcome>;
   };
+  /** Times each part as a phase of the attempt it prepares (ADR 0354). */
+  phases?: PhaseTimer;
   signal?: AbortSignal;
   onRun?: () => Promise<void>;
 }): Promise<WorkspaceSetupOutcome> {
@@ -523,6 +602,13 @@ export async function runWorkspaceSetup(input: {
   });
   if (!plan) return { status: "current" };
   const parts = planParts(plan);
+  const cause = setupCause({
+    plan,
+    recorded,
+    rebuilt: input.rebuilt === true,
+    moved: input.moved === true,
+  });
+  const phases = input.phases ?? UNTIMED;
   if (parts.length > 0) await input.onRun?.();
   await provider.uploadFiles(
     sandboxId,
@@ -550,14 +636,15 @@ export async function runWorkspaceSetup(input: {
       );
     return { status: "failed", ...ran, log: tail, parts };
   };
-  /** One script running `only` of the plan's shell parts, or all of them. */
-  const script = async (only?: SetupPart[]) => {
+  /** One script running `only` of the plan's shell parts. */
+  const script = async (only: readonly ("environment" | "personal")[]) => {
     await provider.uploadFiles(
       sandboxId,
       {
         "run.sh": workspaceSetupScript({
           plan,
-          ...(only ? { parts: only } : {}),
+          cause,
+          parts: only,
           ...(alone ? { loadSecrets: false } : {}),
         }),
       },
@@ -573,9 +660,7 @@ export async function runWorkspaceSetup(input: {
         ...(env ? { env } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
       });
-    return network &&
-      plan.environment &&
-      (!only || only.includes("environment"))
+    return network && only.includes("environment")
       ? onSetupNetwork({
           provider,
           sandboxId,
@@ -585,8 +670,17 @@ export async function runWorkspaceSetup(input: {
         })
       : run();
   };
-  if (!plan.workflow || !input.workflow) {
-    const ran = await script();
+  /** One shell part, timed; what the setup came to when it did not succeed. */
+  const part = async (
+    name: "environment" | "personal",
+  ): Promise<WorkspaceSetupOutcome | undefined> => {
+    const ran = await phases.run(`setup.${name}`, () => script([name]));
+    if (ran === "aborted") return { status: "aborted" };
+    return ran.exitCode === 0 && !ran.timedOut ? undefined : failed(ran);
+  };
+  // Nothing to run: what the workspace stands on is recorded.
+  if (parts.length === 0) {
+    const ran = await script([]);
     if (ran === "aborted") return { status: "aborted" };
     return ran.exitCode === 0 && !ran.timedOut
       ? { status: "succeeded" }
@@ -594,51 +688,42 @@ export async function runWorkspaceSetup(input: {
   }
   // The command, then the workflow, then the owner's part (ADR 0324).
   if (plan.environment) {
-    const ran = await script(["environment"]);
-    if (ran === "aborted") return { status: "aborted" };
-    if (ran.exitCode !== 0 || ran.timedOut) return failed(ran);
+    const stopped = await part("environment");
+    if (stopped) return stopped;
   }
-  // Nothing set up yet, or an earlier try that did not finish: why the
-  // workspace is new. Otherwise what changed since it was set up.
-  const reason: SetupWorkflowReason =
-    !recorded || recorded.environment === NONE
-      ? input.workflow.moved
-        ? "base-moved"
-        : input.workflow.rebuilt
-          ? "rebuilt"
-          : "created"
-      : recorded.base !== plan.record.base
-        ? "base-moved"
-        : "changed";
-  const workflow = await input.workflow.run({ reason });
-  if (workflow.status === "aborted") return { status: "aborted" };
-  if (workflow.status === "failed")
-    return {
-      status: "failed",
-      exitCode: null,
-      timedOut: workflow.timedOut,
-      log: workflow.error,
-      parts,
-      workflow: input.workflow.name,
-    };
-  const done = plan.personal
-    ? setupRecordAfter({ plan, part: "workflow" })
-    : plan.record;
-  await provider.executeCommand(
-    sandboxId,
-    [
-      `mkdir -p ${SESSION_FROM_PROJECT}`,
-      `printf '%s\\n' ${shellQuote(JSON.stringify(done))} > ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done.next`)}`,
-      `mv -f ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done.next`)} ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done`)}`,
-    ].join(" && "),
-    { cwd: projectDir, timeout: 60 },
-  );
-  if (!plan.personal) return { status: "succeeded" };
-  const ran = await script(["personal"]);
-  if (ran === "aborted") return { status: "aborted" };
-  return ran.exitCode === 0 && !ran.timedOut
-    ? { status: "succeeded" }
-    : failed(ran);
+  if (plan.workflow && input.workflow) {
+    const { name, run } = input.workflow;
+    const workflow = await phases.run("setup.workflow", () =>
+      run({ reason: cause.reason }),
+    );
+    if (workflow.status === "aborted") return { status: "aborted" };
+    if (workflow.status === "failed")
+      return {
+        status: "failed",
+        exitCode: null,
+        timedOut: workflow.timedOut,
+        log: workflow.error,
+        parts,
+        workflow: name,
+      };
+    const done = plan.personal
+      ? setupRecordAfter({ plan, part: "workflow" })
+      : plan.record;
+    await provider.executeCommand(
+      sandboxId,
+      [
+        `mkdir -p ${SESSION_FROM_PROJECT}`,
+        `printf '%s\\n' ${shellQuote(JSON.stringify(done))} > ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done.next`)}`,
+        `mv -f ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done.next`)} ${shellQuote(`${SESSION_FROM_PROJECT}/setup.done`)}`,
+      ].join(" && "),
+      { cwd: projectDir, timeout: 60 },
+    );
+  }
+  if (plan.personal) {
+    const stopped = await part("personal");
+    if (stopped) return stopped;
+  }
+  return { status: "succeeded" };
 }
 
 /**

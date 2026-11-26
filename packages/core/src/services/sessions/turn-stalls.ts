@@ -2,6 +2,7 @@ import type { DB, Json } from "@catamorphic/db";
 import { jsonbText } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { recordSessionEvent } from "../workspace-events.js";
+import { type AttemptPhase, attemptPhases } from "./attempt-phases.js";
 
 /*
  * Progress, stalls and restarts of a running turn (ADR 0333). An attempt
@@ -335,7 +336,10 @@ export async function nextStallAt(input: {
   return row?.at ? new Date(row.at) : null;
 }
 
-/** A turn's attempts as `attempts` reads them, with their diagnostics. */
+/**
+ * A turn's attempts as `attempts` reads them, with their diagnostics and
+ * how long each part of their preparation took (ADR 0354).
+ */
 export interface AttemptRecord {
   id: string;
   ordinal: number;
@@ -348,6 +352,8 @@ export interface AttemptRecord {
   stalledAt: string | null;
   /** The masked tails of the runner's and the harness's own output. */
   diagnostics: { runner: string; harness: string } | null;
+  /** Its preparation's phases, oldest first; `endedAt` is null while one runs. */
+  phases: AttemptPhase[];
 }
 
 export async function attemptRecords(
@@ -367,6 +373,7 @@ export async function attemptRecords(
       "progress_at",
       "stalled_at",
       "diagnostics",
+      "phases",
     ])
     .where("session_id", "=", input.sessionId)
     .where("turn_id", "=", input.turnId)
@@ -401,6 +408,10 @@ export async function attemptRecords(
                 : "",
           }
         : null,
+      phases: attemptPhases({
+        phases: row.phases,
+        completedAt: iso(row.completed_at),
+      }),
     };
   });
 }

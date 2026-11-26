@@ -316,6 +316,11 @@ import {
   workspaceMoveRefusedNote,
   workspaceNotice,
 } from "./session-workspaces.js";
+import {
+  AttemptPhases,
+  type PhaseTimer,
+  UNTIMED,
+} from "./sessions/attempt-phases.js";
 import { modelInputText } from "./sessions/input-text.js";
 import { NativeStateStore } from "./sessions/native-state.js";
 import type { ChatPullRequest } from "./sessions/pull-request-tool.js";
@@ -420,8 +425,8 @@ import {
   runWorkspaceSetup,
   SetupNetworkError,
   type SetupNetworkRefusal,
+  type SetupReason,
   type SetupWorkflowOutcome,
-  type SetupWorkflowReason,
   sessionDirectory,
   setupClaimWaitMs,
   type WorkspaceSetupOutcome,
@@ -1228,6 +1233,10 @@ export interface NativeAgentCheckout {
     personalAllowed: boolean;
     /** The checkout's base commit, when it stands on one (ADRs 0178, 0257). */
     base?: string;
+    /** This preparation moved the checkout's base (ADR 0178). */
+    moved?: boolean;
+    /** Times each command as a phase of the attempt it prepares (ADR 0354). */
+    phases?: PhaseTimer;
     timeoutMinutes: number;
     signal: AbortSignal;
     onRun(): Promise<void>;
@@ -6813,6 +6822,13 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow();
     const projectId = session.project_id;
     const sessionId = session.id;
+    // How long each part of this preparation takes, for whoever reads the
+    // attempt (ADR 0354).
+    const phases = new AttemptPhases({
+      db: this.db,
+      attemptId: input.attempt.id,
+    });
+    await phases.begin({ allocationId: session.allocation_id });
     const agent = await this.resolveAgent(session.agent_id, projectId);
     await this.resumeDelegation({ session, turn });
     const runtime = await this.resolveExecutionRuntime(
@@ -6935,7 +6951,7 @@ export class AgentSessionsService {
         session,
         agent,
         runtime,
-        { populate: !setupNetwork.widens },
+        { populate: !setupNetwork.widens, phases },
       );
       session = await this.db
         .selectFrom("agent_sessions")
@@ -6975,6 +6991,7 @@ export class AgentSessionsService {
           created: workspace.created === true,
           widens: reused ? undefined : setupNetwork.widens,
           moved: baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+          phases,
         });
         if (prepared.note) notes.push(prepared.note);
         const { sandboxProviderId, fresh } = prepared;
@@ -7004,6 +7021,7 @@ export class AgentSessionsService {
                 ownerAuthored,
                 moved:
                   baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+                phases,
                 signal,
               })
             : undefined;
@@ -7049,6 +7067,7 @@ export class AgentSessionsService {
                 ownerAuthored,
                 moved:
                   baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+                phases,
                 signal,
               })
             : undefined;
@@ -7072,6 +7091,7 @@ export class AgentSessionsService {
           sandboxProviderId,
           afterSetup: widened !== undefined,
           ...(runtime.checkout ? { checkout: runtime.checkout } : {}),
+          phases,
         });
         if (agent.signIn) {
           // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
@@ -7226,6 +7246,7 @@ export class AgentSessionsService {
                 ownerAuthored: credentialsAllowed,
                 moved:
                   baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+                phases,
                 signal,
               });
         const setupNote = setup?.note
@@ -7298,6 +7319,7 @@ export class AgentSessionsService {
           environment: runtime.setup,
           personalAllowed:
             runtime.personalCredentials === true && ownerAuthored,
+          phases,
           signal,
         });
         if (setup.note) notes.push(setup.note);
@@ -7316,6 +7338,8 @@ export class AgentSessionsService {
           workflow: runtime.setup?.workflow,
           personalAllowed: runtime.personalCredentials === true,
         }),
+        // Another chat's turn makes or sets up the workspace they share.
+        onWait: () => phases.start("workspace.wait"),
         operation: ({ signal }) => prepareWorkspace(signal),
       });
     else await prepareWorkspace();
@@ -8800,7 +8824,10 @@ export class AgentSessionsService {
     seedOnly?: boolean;
     /** How the Environment's workspaces fetch their base (ADR 0353). */
     checkout?: AdmittedCheckout;
+    /** Times the checkout and the restore for the attempt (ADR 0354). */
+    phases?: PhaseTimer;
   }): Promise<readonly SandboxModelGateway[]> {
+    const phases = input.phases ?? UNTIMED;
     const row = await this.db
       .selectFrom("agent_sessions")
       .select(["id", "workspace", "allocation_id", "workspace_session_id"])
@@ -8842,17 +8869,20 @@ export class AgentSessionsService {
         })
           ? {
               fetchBase: () =>
-                this.fetchSandboxBase({
-                  tenantId: input.identity.tenantId,
-                  projectId: input.projectId,
-                  sessionId: copyId,
-                  base: base.commit,
-                  provider: input.provider,
-                  sandboxProviderId: input.sandboxProviderId,
-                  checkout: input.checkout,
-                }),
+                phases.run("workspace.checkout", () =>
+                  this.fetchSandboxBase({
+                    tenantId: input.identity.tenantId,
+                    projectId: input.projectId,
+                    sessionId: copyId,
+                    base: base.commit,
+                    provider: input.provider,
+                    sandboxProviderId: input.sandboxProviderId,
+                    checkout: input.checkout,
+                  }),
+                ),
             }
           : {}),
+        restoring: (work) => phases.run("workspace.restore", work),
       });
     } finally {
       await copy.dispose();
@@ -9388,6 +9418,8 @@ export class AgentSessionsService {
     ownerAuthored?: boolean;
     /** This preparation moved the workspace's base (ADR 0178). */
     moved?: boolean;
+    /** Times each part as a phase of the attempt (ADR 0354). */
+    phases?: PhaseTimer;
     signal: AbortSignal;
   }): Promise<{ note?: string; settled: boolean }> {
     const { session, runner } = input;
@@ -9448,9 +9480,10 @@ export class AgentSessionsService {
     // The workspace's own session, whichever session's turn sets it up
     // (ADR 0322): a shared subsession that arrived first sets up its
     // workspace session's workspace, so the workflow runs, is stamped and
-    // is recorded for that session.
+    // is recorded for that session, and its commands hear whether that
+    // session's workspace was made again.
     const setUpFor =
-      workflowName && session.workspace_session_id
+      runner.kind === "sandbox" && session.workspace_session_id
         ? await this.db
             .selectFrom("agent_sessions")
             .selectAll()
@@ -9460,9 +9493,7 @@ export class AgentSessionsService {
     const workflow = workflowName
       ? {
           name: workflowName,
-          rebuilt: setUpFor.workspace_generation > 1,
-          moved: input.moved === true,
-          run: ({ reason }: { reason: SetupWorkflowReason }) =>
+          run: ({ reason }: { reason: SetupReason }) =>
             this.runSetupWorkflow({
               identity: input.identity,
               projectId: input.projectId,
@@ -9506,6 +9537,8 @@ export class AgentSessionsService {
               workingDirectory: runner.workingDirectory,
               ...commands,
               personalAllowed,
+              moved: input.moved === true,
+              ...(input.phases ? { phases: input.phases } : {}),
               timeoutMinutes,
               signal: input.signal,
               onRun,
@@ -9524,7 +9557,10 @@ export class AgentSessionsService {
           timeoutMinutes,
           ...(widening ? { network: widening } : {}),
           ...(runner.isolated ? { isolated: runner.isolated } : {}),
+          rebuilt: setUpFor.workspace_generation > 1,
+          moved: input.moved === true,
           ...(workflow ? { workflow } : {}),
+          ...(input.phases ? { phases: input.phases } : {}),
           signal: input.signal,
           onRun,
         }).then(
@@ -9568,7 +9604,7 @@ export class AgentSessionsService {
     projectId: string;
     session: SessionRow;
     workflowName: string;
-    reason: SetupWorkflowReason;
+    reason: SetupReason;
     network: boolean;
     ownerAuthored: boolean;
     timeoutMinutes: number;
@@ -9686,30 +9722,32 @@ export class AgentSessionsService {
     sandboxProviderId: string;
     ownerAuthored: boolean;
     moved: boolean;
+    phases: PhaseTimer;
     signal: AbortSignal;
   }): Promise<{ note?: string; settled: boolean }> {
     const { identity, projectId, session, provider } = input;
     // The workspace session's copy holds the base (ADR 0322): a shared
     // subsession whose turn makes the workspace has none of its own.
     const copyId = workspaceCopyId(session);
-    // Fetched while the sandbox still reaches only the gateway, with a
-    // token that ends before its network widens (ADR 0353).
-    const fetched =
-      this.fetchesBase({
-        projectId,
-        sessionId: copyId,
-        checkout: input.runtime.checkout,
-      }) &&
-      (await this.fetchSandboxBase({
-        tenantId: identity.tenantId,
-        projectId,
-        sessionId: copyId,
-        base: input.base,
-        provider,
-        sandboxProviderId: input.sandboxProviderId,
-        checkout: input.runtime.checkout,
-      }));
-    if (!fetched) {
+    await input.phases.run("workspace.checkout", async () => {
+      // Fetched while the sandbox still reaches only the gateway, with a
+      // token that ends before its network widens (ADR 0353).
+      const fetched =
+        this.fetchesBase({
+          projectId,
+          sessionId: copyId,
+          checkout: input.runtime.checkout,
+        }) &&
+        (await this.fetchSandboxBase({
+          tenantId: identity.tenantId,
+          projectId,
+          sessionId: copyId,
+          base: input.base,
+          provider,
+          sandboxProviderId: input.sandboxProviderId,
+          checkout: input.runtime.checkout,
+        }));
+      if (fetched) return;
       const copy = await this.projectManager.openSession({
         tenantId: identity.tenantId,
         projectId,
@@ -9726,7 +9764,7 @@ export class AgentSessionsService {
       } finally {
         await copy.dispose();
       }
-    }
+    });
     await removeSessionCredentials({
       provider,
       sandboxId: input.sandboxProviderId,
@@ -9765,6 +9803,7 @@ export class AgentSessionsService {
         personalAllowed: false,
         ownerAuthored: input.ownerAuthored,
         moved: input.moved,
+        phases: input.phases,
         signal: input.signal,
       });
     } catch (error) {
@@ -9801,6 +9840,7 @@ export class AgentSessionsService {
     sandboxProviderId: string;
     ownerAuthored: boolean;
     moved: boolean;
+    phases: PhaseTimer;
     signal: AbortSignal;
   }): Promise<{ note?: string; settled: boolean } | undefined> {
     const { identity, projectId, session, provider, setup } = input;
@@ -9827,6 +9867,7 @@ export class AgentSessionsService {
       sandboxProviderId: input.sandboxProviderId,
       seedOnly: true,
       ...(input.runtime.checkout ? { checkout: input.runtime.checkout } : {}),
+      phases: input.phases,
     });
     await removeSessionCredentials({
       provider,
@@ -9860,6 +9901,7 @@ export class AgentSessionsService {
       personalAllowed: false,
       ownerAuthored: input.ownerAuthored,
       moved: input.moved,
+      phases: input.phases,
       signal: input.signal,
     });
   }
@@ -9946,6 +9988,7 @@ export class AgentSessionsService {
     widens: { egress: SandboxEgress; base: string } | undefined;
     /** This preparation moved the workspace's base (ADR 0178). */
     moved: boolean;
+    phases: PhaseTimer;
   }): Promise<{ sandboxProviderId: string; fresh: boolean; note?: string }> {
     const { identity, projectId, session, runtime, provider } = input;
     if (input.created || !runtime.allocation?.policy.sandbox?.setupEgress)
@@ -10015,7 +10058,7 @@ export class AgentSessionsService {
       { ...session, sandbox_id: null },
       input.agent,
       runtime,
-      { populate: false },
+      { populate: false, phases: input.phases },
     );
     if (!workspace.sandboxProviderId)
       throw new Error("The workspace's new sandbox did not start");
@@ -15839,6 +15882,8 @@ export class AgentSessionsService {
     options: {
       /** Put the session's files in a new sandbox (default); see DevSandboxService. */
       populate?: boolean;
+      /** Times making or starting the sandbox for the attempt (ADR 0354). */
+      phases?: PhaseTimer;
     } = {},
   ): Promise<{
     workingDirectory: string;
@@ -15873,12 +15918,15 @@ export class AgentSessionsService {
         .where("allocation_id", "=", session.allocation_id)
         .executeTakeFirst()) ?? session;
     const first = session.workspace_session_id ? await readOwner() : session;
+    const phases = options.phases ?? UNTIMED;
     if (!first.sandbox_id && (await this.sharesWorkspace(first)))
       return withReplicaClaim({
         db: this.db,
         name: `workspace-make:${first.id}`,
         ttlSeconds: this.workspaceClaimSeconds,
         waitMs: WORKSPACE_SYNC_WAIT_MS,
+        // Another chat's turn is making the workspace they share.
+        onWait: () => phases.start("workspace.wait"),
         operation: async ({ signal }) =>
           this.useOrMakeSandbox({
             identity,
@@ -15887,6 +15935,7 @@ export class AgentSessionsService {
             owner: await readOwner(),
             runtime: { ...runtime, provider, devSandboxes },
             populate: options.populate ?? true,
+            phases,
             signal,
           }),
       });
@@ -15897,6 +15946,7 @@ export class AgentSessionsService {
       owner: first,
       runtime: { ...runtime, provider, devSandboxes },
       populate: options.populate ?? true,
+      phases,
     });
   }
 
@@ -16042,6 +16092,7 @@ export class AgentSessionsService {
       devSandboxes: DevSandboxService;
     };
     populate: boolean;
+    phases: PhaseTimer;
     /** The claim it runs under, when another session may make it too. */
     signal?: AbortSignal;
   }): Promise<{
@@ -16061,6 +16112,7 @@ export class AgentSessionsService {
         const sandboxProviderId = await this.resolveSandboxProviderId(
           owner,
           runtime.provider,
+          { phases: input.phases },
         );
         if (session.sandbox_id !== owner.sandbox_id)
           await this.db
@@ -16081,11 +16133,16 @@ export class AgentSessionsService {
         providerId: replaced.providerId,
       });
     }
-    const { handle, baseCommitSha } = await this.prepareDevSandbox(
-      { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
-      identity,
-      projectId,
-      input.populate,
+    // Its image is pulled or built as the machine makes it.
+    const { handle, baseCommitSha } = await input.phases.run(
+      "sandbox.create",
+      () =>
+        this.prepareDevSandbox(
+          { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
+          identity,
+          projectId,
+          input.populate,
+        ),
     );
     input.signal?.throwIfAborted();
     await this.db.transaction().execute(async (trx) => {
@@ -16276,6 +16333,10 @@ export class AgentSessionsService {
   private async resolveSandboxProviderId(
     session: SessionRow,
     provider: SandboxProvider,
+    options: {
+      /** Times starting a stopped sandbox for the attempt (ADR 0354). */
+      phases?: PhaseTimer;
+    } = {},
   ): Promise<string> {
     if (!session.sandbox_id) {
       throw new AgentSessionNotFoundError(session.id);
@@ -16289,7 +16350,9 @@ export class AgentSessionsService {
 
     const status = await provider.getSandboxStatus(row.provider_id);
     if (status === "stopped" || status === "archived") {
-      await provider.startSandbox(row.provider_id);
+      await (options.phases ?? UNTIMED).run("sandbox.start", () =>
+        provider.startSandbox(row.provider_id),
+      );
     }
     return row.provider_id;
   }

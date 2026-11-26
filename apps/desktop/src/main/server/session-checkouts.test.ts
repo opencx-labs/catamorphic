@@ -1303,6 +1303,66 @@ describe("SessionCheckouts", () => {
         status: "succeeded",
       });
     });
+
+    it("tells each setup command what it runs on and why, and times it (ADR 0354)", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      const timed: string[] = [];
+      const told = (file: string) =>
+        `echo "$WORK_SETUP_REASON \${WORK_BASE:-unset} \${WORK_PREVIOUS_BASE:-unset}" >> ../${file}`;
+      const setup = (input: { base?: string; moved?: boolean }) =>
+        checkouts.setup({
+          projectId,
+          sessionId,
+          workingDirectory: worktree,
+          environment: told("told-environment.txt"),
+          personal: told("told-personal.txt"),
+          personalAllowed: true,
+          ...input,
+          phases: {
+            run: async (phase, work) => {
+              timed.push(phase);
+              return work();
+            },
+            start: async () => async () => {},
+          },
+          timeoutMinutes: 1,
+          signal: new AbortController().signal,
+          onRun: async () => {},
+        });
+      const read = (file: string) =>
+        fs.readFile(path.join(path.dirname(worktree), file), "utf8");
+      const first = "a".repeat(40);
+      const second = "b".repeat(40);
+      // A worktree that stands on no base, then on one, then on another.
+      expect((await setup({})).outcome).toEqual({ status: "succeeded" });
+      expect((await setup({ base: first })).outcome).toEqual({
+        status: "succeeded",
+      });
+      expect((await setup({ base: second, moved: true })).outcome).toEqual({
+        status: "succeeded",
+      });
+      expect(await read("told-environment.txt")).toBe(
+        [
+          "created unset unset",
+          `base-moved ${first} unset`,
+          `base-moved ${second} ${first}`,
+          "",
+        ].join("\n"),
+      );
+      // The person's own command, run after it, hears the same.
+      expect(await read("told-personal.txt")).toBe(
+        await read("told-environment.txt"),
+      );
+      expect(timed).toEqual([
+        "setup.environment",
+        "setup.personal",
+        "setup.environment",
+        "setup.personal",
+        "setup.environment",
+        "setup.personal",
+      ]);
+    });
   });
 });
 

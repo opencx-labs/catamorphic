@@ -881,6 +881,12 @@ export {
   workspaceMoveNote,
 } from "./services/session-workspaces.js";
 export {
+  ATTEMPT_PHASES,
+  type AttemptPhase,
+  type AttemptPhaseName,
+  type PhaseTimer,
+} from "./services/sessions/attempt-phases.js";
+export {
   type ChatPullRequest,
   PULL_REQUEST_TOOL_NAME,
   type PullRequestRequest,
@@ -1067,9 +1073,14 @@ export {
   parseSetupRecord,
   planWorkspaceSetup,
   SETUP_LOG_TAIL_LINES,
+  SETUP_VARIABLES,
+  type SetupCause,
   type SetupPart,
+  type SetupReason,
   type SetupRecord,
+  setupCause,
   setupRecordAfter,
+  setupVariables,
   type WorkspaceSetupOutcome,
 } from "./services/workspace-setup.js";
 export {

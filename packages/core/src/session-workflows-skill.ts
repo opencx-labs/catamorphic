@@ -376,7 +376,16 @@ it stops that turn only, and answers { interrupted: false } when it no longer
 works. read({ sessionId | key, turnId, include: ["attempts"] }) reads a turn's attempts: status,
 error, progressAt, and diagnostics { runner, harness }, the last 16 000
 characters of the runner's and the harness's own output, masked, in whole
-lines, kept for attempts that did not complete. Keep those as the evidence,
+lines, kept for attempts that did not complete. Each attempt also has phases,
+how long each part of its preparation took: [{ phase, startedAt, endedAt }],
+oldest first, endedAt null while one runs, so a turn stuck preparing shows
+where. The phases, each where it applied: machine.wait (the chat waited for a
+machine), workspace.wait (another chat's turn was making or setting up the
+workspace they share), sandbox.create (its image pulled or built too),
+sandbox.start, workspace.checkout (the base commit), workspace.restore (the
+chat's saved work), setup.environment, setup.workflow, setup.personal,
+harness.start and harness.first-output (until the agent's first item). Time
+between phases is Work's own preparation. Keep the diagnostics as the evidence,
 not exec output: code the chat runs can forge what a command prints, and
 commands may run apart from the agent, seeing neither its processes nor its
 logs. Read the chat again before acting. To keep the evidence in the project

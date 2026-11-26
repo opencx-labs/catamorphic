@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { WorkspaceSetupOutcome } from "@catamorphic/core";
+import type { PhaseTimer, WorkspaceSetupOutcome } from "@catamorphic/core";
 import { ensurePersonalFilesExcluded, hasLocalGit } from "@catamorphic/git";
 import {
   AGENT_COMMIT_AUTHOR,
@@ -1033,6 +1033,8 @@ export class SessionCheckouts {
     personal?: string;
     personalAllowed: boolean;
     base?: string;
+    moved?: boolean;
+    phases?: PhaseTimer;
     timeoutMinutes: number;
     signal: AbortSignal;
     onRun(): Promise<void>;

@@ -578,9 +578,18 @@ provide it take the work:
   again when the workspace's base moves, within \`timeoutMinutes\` (30 by
   default). The image holds the toolchain; setup installs the project's
   dependencies. Its output is in \`.work-session/setup.log\` beside the
-  project; a failure is told to the agent and runs again next turn. A
-  member may add their own \`setup\` in their
-  \`.work/personal/environment.json\`, run after this one in their own chats.
+  project; a failure is told to the agent and runs again next turn. The
+  command reads what it runs on and why: \`WORK_BASE\` is the commit the
+  workspace stands on, \`WORK_PREVIOUS_BASE\` the commit this sandbox's last
+  setup ran on (unset when it has not set up yet), and
+  \`WORK_SETUP_REASON\` is \`created\` (a new workspace), \`rebuilt\` (made
+  again), \`base-moved\` or \`changed\` (the setup changed), the reason a
+  setup workflow is given. An install can skip what did not change:
+  \`[ -n "\${WORK_PREVIOUS_BASE:-}" ] && git diff --quiet
+  "$WORK_PREVIOUS_BASE" "$WORK_BASE" -- pnpm-lock.yaml || pnpm install
+  --frozen-lockfile\`. A member may add their own \`setup\` in their
+  \`.work/personal/environment.json\`, run after this one in their own
+  chats with the same variables.
   With a \`gateway\` or \`allowlist\` network, \`"network": { "allow":
   ["registry.npmjs.org"] }\` lets the setup reach those hosts alone while it
   runs, in a workspace at a ref of the project's remote: a new sandbox

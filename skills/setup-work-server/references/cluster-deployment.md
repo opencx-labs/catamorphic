@@ -813,10 +813,21 @@ caches (ADR 0208):
   beside the project, and the chat shows that the workspace is being set
   up. A failure, or a run longer than `setup.timeoutMinutes` (30 by
   default), is told to the agent with the end of the log; the turn goes
-  on, and setup runs again before the next turn. A member may add their
-  own `setup` in `.work/personal/environment.json`: it runs after the
-  Environment's, only in their own chats in Environments with
-  `"personalCredentials": true`, and only for turns they wrote.
+  on, and setup runs again before the next turn. The command reads what it
+  runs on and why (ADR 0354): `WORK_BASE` is the commit the workspace
+  stands on; `WORK_PREVIOUS_BASE` is the commit this sandbox's last setup
+  ran on, unset when the sandbox has not set up yet; `WORK_SETUP_REASON` is
+  `created` (a new workspace), `rebuilt` (made again, as after idle
+  release), `base-moved` or `changed` (the command or its workflow
+  changed), the reason a setup workflow is given. A setup on its own
+  network (below) reads them too. An install that takes minutes can skip
+  what did not change, such as `[ -n "${WORK_PREVIOUS_BASE:-}" ] && git
+  diff --quiet "$WORK_PREVIOUS_BASE" "$WORK_BASE" -- pnpm-lock.yaml ||
+  pnpm install --frozen-lockfile`, where the checkout holds both commits.
+  A member may add their own `setup` in `.work/personal/environment.json`:
+  it runs after the Environment's with the same variables, only in their
+  own chats in Environments with `"personalCredentials": true`, and only
+  for turns they wrote.
 - `setup.network.allow` lists the only hosts the Environment's setup
   reaches while it runs (ADR 0257), for an Environment whose `network` is
   `gateway` or `allowlist`; `setup.secrets` names the Environment's secrets

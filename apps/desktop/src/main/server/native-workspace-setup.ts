@@ -2,11 +2,14 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  type PhaseTimer,
   parseSetupRecord,
   planWorkspaceSetup,
   SETUP_LOG_TAIL_LINES,
   type SetupRecord,
+  setupCause,
   setupRecordAfter,
+  setupVariables,
   type WorkspaceSetupOutcome,
 } from "@catamorphic/core";
 
@@ -18,7 +21,9 @@ import {
  * worktree's base moves. What succeeded is recorded after each part
  * in `stateDirectory`, the worktree's own Git directory, so it goes with
  * the worktree and a worktree checked out again sets up again. Output is
- * appended to `work-setup.log` there.
+ * appended to `work-setup.log` there. Each command hears the commit it runs
+ * on, the one this worktree last set up on, and why it runs (ADR 0354), and
+ * is timed as a phase of the attempt with `phases`.
  */
 export async function runNativeWorkspaceSetup(input: {
   workingDirectory: string;
@@ -27,22 +32,35 @@ export async function runNativeWorkspaceSetup(input: {
   personal?: string;
   personalAllowed: boolean;
   base?: string;
+  moved?: boolean;
+  phases?: PhaseTimer;
   timeoutMinutes: number;
   signal: AbortSignal;
   onRun(): Promise<void>;
 }): Promise<{ outcome: WorkspaceSetupOutcome; logPath: string }> {
   const logPath = path.join(input.stateDirectory, "work-setup.log");
   const recordPath = path.join(input.stateDirectory, "work-setup.json");
+  const recorded = parseSetupRecord(
+    await fs.readFile(recordPath, "utf8").catch(() => ""),
+  );
   const plan = planWorkspaceSetup({
     ...(input.environment ? { environment: input.environment } : {}),
     ...(input.personal ? { personal: input.personal } : {}),
     personalAllowed: input.personalAllowed,
     ...(input.base ? { base: input.base } : {}),
-    recorded: parseSetupRecord(
-      await fs.readFile(recordPath, "utf8").catch(() => ""),
-    ),
+    recorded,
   });
   if (!plan) return { outcome: { status: "current" }, logPath };
+  // A worktree checked out again has no record: it is new, never rebuilt.
+  const variables = setupVariables({
+    plan,
+    cause: setupCause({
+      plan,
+      recorded,
+      rebuilt: false,
+      moved: input.moved === true,
+    }),
+  });
   const parts = [
     ...(plan.environment
       ? [
@@ -82,13 +100,18 @@ export async function runNativeWorkspaceSetup(input: {
       const script = path.join(scripts, `${part}.sh`);
       await fs.writeFile(script, `${command}\n`);
       await log.write(`\n-- ${label}\n`);
-      const ran = await runPart({
-        script,
-        workingDirectory: input.workingDirectory,
-        logFd: log.fd,
-        timeoutMs: Math.max(0, deadline - Date.now()),
-        signal: input.signal,
-      });
+      const run = () =>
+        runPart({
+          script,
+          workingDirectory: input.workingDirectory,
+          variables,
+          logFd: log.fd,
+          timeoutMs: Math.max(0, deadline - Date.now()),
+          signal: input.signal,
+        });
+      const ran = await (input.phases
+        ? input.phases.run(`setup.${part}`, run)
+        : run());
       if (ran === "aborted") return { outcome: { status: "aborted" }, logPath };
       if (ran.exitCode !== 0 || ran.timedOut) {
         await log.write(
@@ -126,6 +149,8 @@ export async function runNativeWorkspaceSetup(input: {
 function runPart(input: {
   script: string;
   workingDirectory: string;
+  /** What the command is told (ADR 0354); one with no value is unset. */
+  variables: Record<string, string | undefined>;
   logFd: number;
   timeoutMs: number;
   signal: AbortSignal;
@@ -136,7 +161,7 @@ function runPart(input: {
     // so bash runs the part directly, whatever their own shell is.
     const child = spawn("bash", ["-e", input.script], {
       cwd: input.workingDirectory,
-      env: process.env,
+      env: { ...process.env, ...input.variables },
       detached: true,
       stdio: ["ignore", input.logFd, input.logFd],
     });
