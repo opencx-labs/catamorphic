@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
   PlacementWaitsService,
+  PollPacer,
   releaseReplicaClaim,
   renewReplicaClaim,
   takeReplicaClaim,
+  type WorkWakeups,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
@@ -22,6 +24,11 @@ const tracer = getTracer("@catamorphic/work-server");
 
 /** How long a pass waits for one machine's reset; a slower one finishes later. */
 const RESET_WAIT_MS = 3 * 60_000;
+
+/** How often a replica looks for change a plan reads (see `check`). */
+export const MACHINE_CHECK_INTERVAL_MS = 10_000;
+/** How often it looks for a while after work began waiting on it. */
+export const MACHINE_CHECK_QUICK_MS = 500;
 
 /**
  * The sequencer's world on the Work server (ADR 0349): machines, their
@@ -145,6 +152,37 @@ export class WorkMachines {
     const seen = await this.deps.workers.machines.signature();
     if (seen === this.seen) return;
     this.passSoon();
+  }
+
+  /**
+   * {@link check} until `signal` aborts: every 10 seconds, and at once
+   * when work begins waiting for a machine on this replica, which a
+   * `placement` hint says (ADR 0229). The wait may not be committed when
+   * its hint arrives, so the looks stay half a second apart for a while
+   * after one; waits that begin together share those looks. Work that
+   * began waiting on another replica is seen at that replica's hint, or
+   * here within 10 seconds.
+   */
+  async watch(args: {
+    signal: AbortSignal;
+    wakeups: WorkWakeups;
+    intervalMs?: number;
+    quickMs?: number;
+  }): Promise<void> {
+    const pacer = new PollPacer({
+      quickMs: args.quickMs ?? MACHINE_CHECK_QUICK_MS,
+      idleMs: args.intervalMs ?? MACHINE_CHECK_INTERVAL_MS,
+      signal: args.signal,
+      wakeups: args.wakeups,
+      topic: "placement",
+    });
+    while (!args.signal.aborted) {
+      await pacer.wait();
+      if (args.signal.aborted) return;
+      await this.check().catch((error: unknown) =>
+        this.deps.log?.(`Machine check failed: ${message(error)}`),
+      );
+    }
   }
 
   private get leaseMs(): number {

@@ -905,7 +905,7 @@ export class CatamorphicCore {
       this.projectManager,
     );
     this.executionAllocations = new ExecutionAllocationsService(this.db);
-    this.placementWaits = new PlacementWaitsService(this.db);
+    this.placementWaits = new PlacementWaitsService(this.db, this.wakeups);
     this.sessionWaits = new SessionWaitsService(this.db);
     this.clientRunners = config.clientExecution
       ? new ClientRunnersService(this.db, this.projectEnvironments)
@@ -940,6 +940,7 @@ export class CatamorphicCore {
       // Constructed further down; resolved per call.
       secrets: () => this.secrets,
       retentionDays: config.caches?.retentionDays ?? 30,
+      wakeups: this.wakeups,
     });
     this.agentCapabilities = new AgentCapabilitiesService({
       db: this.db,

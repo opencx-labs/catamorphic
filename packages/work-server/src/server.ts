@@ -982,30 +982,20 @@ async function createWorkServerInner(
   if (workMachines) {
     // A pass every minute, and at once when what a plan reads changed:
     // waiting work, what machines hold, a machine connecting or going
-    // unseen, accounts and roles. That is one cheap look every few seconds.
+    // unseen, accounts and roles. That is one cheap look every few seconds,
+    // and one as soon as work begins waiting for a machine on this replica.
     const machineTimer = setInterval(planMachines, 60_000);
     machineTimer.unref();
-    let checking: Promise<void> | undefined;
-    const checkTimer = setInterval(() => {
-      checking ??= workMachines
-        .check()
-        .catch((error: unknown) =>
-          log(
-            `Machine check failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          ),
-        )
-        .finally(() => {
-          checking = undefined;
-        });
-    }, 10_000);
-    checkTimer.unref();
+    const watching = new AbortController();
+    const watched = workMachines.watch({
+      signal: watching.signal,
+      wakeups: core.wakeups,
+    });
     planMachines();
     disposers.push(async () => {
       clearInterval(machineTimer);
-      clearInterval(checkTimer);
-      await checking;
+      watching.abort();
+      await watched;
       await workMachines.settle();
     });
   }
