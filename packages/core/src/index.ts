@@ -417,6 +417,7 @@ export {
   type ExecutionJobKind,
   type ExecutionJobStatus,
   ExecutionJobsService,
+  PLACEMENT_FREE_JOB_KINDS,
 } from "./services/execution-jobs-service.js";
 export {
   ExecutionJobDeferredError,

@@ -839,6 +839,145 @@ it.skipIf(!db)(
   },
 );
 
+/*
+ * A pause timeout and a host call's follower need no placement (ADRs 0289,
+ * 0324): parking, workspace cleanup and readmission ignore them, and
+ * claiming and lease renewal need no Allocation for them. A follower that
+ * parking ignored but claiming still placed could never be claimed again
+ * once its run parked, nor renew a lease taken before: the run waited for
+ * good.
+ */
+for (const kind of ["durable_pause_timeout", "host_call_wait"] as const) {
+  it.skipIf(!db)(
+    `follows a parked run's ${kind} job from any replica, holding none of its capacity`,
+    async () => {
+      if (!core || !db || !nodes) return;
+      await quietOthers();
+      const lease = await register();
+      const elsewhere = await register();
+      const work = await placeWork({ nodeId: lease.id });
+      const database = db;
+      const allocationRow = () =>
+        database
+          .selectFrom("execution_allocations")
+          .select(["status", "release_reason", "capacity_released_at"])
+          .where("id", "=", work.allocationId)
+          .executeTakeFirstOrThrow();
+      const onNode = new ExecutionJobsService(db, lease);
+      const job = await onNode.enqueue({
+        tenantId: identity.tenantId,
+        workflowRunId: work.runId,
+        kind,
+        payload: {},
+      });
+
+      // Claimed while the run still holds its Allocation.
+      const first = await onNode.claimById({
+        jobId: job.id,
+        workerId: "first",
+      });
+      if (!first?.leaseToken) throw Error("No lease");
+      const held = {
+        jobId: job.id,
+        workerId: "first",
+        leaseToken: first.leaseToken,
+        leaseGeneration: first.leaseGeneration,
+      };
+
+      // It runs, and the run parks under it: it uses none of the Allocation.
+      await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+      expect(await allocationRow()).toMatchObject({
+        status: "released",
+        release_reason: "idle",
+        capacity_released_at: null,
+      });
+      // The workspace and its capacity come back while the job still runs.
+      await cleanupWorkerAllocations({
+        db,
+        workerNode: lease,
+        provider: cleanupProvider(),
+      });
+      expect((await allocationRow()).capacity_released_at).not.toBeNull();
+      // The lease taken before the park renews after it.
+      expect(await onNode.heartbeat(held)).toBe(true);
+
+      // Its slice ended with the work unfinished: another replica's node
+      // follows on, though the run has no placement there or anywhere.
+      expect(await onNode.release({ ...held, availableAt: new Date() })).toBe(
+        true,
+      );
+      const other = new ExecutionJobsService(db, elsewhere);
+      const [second] = await other.claim({ workerId: "second", kinds: [kind] });
+      if (second?.id !== job.id || !second.leaseToken)
+        throw Error("The parked run's job was not claimable");
+      const moved = {
+        jobId: job.id,
+        workerId: "second",
+        leaseToken: second.leaseToken,
+        leaseGeneration: second.leaseGeneration,
+      };
+      expect(await other.heartbeat(moved)).toBe(true);
+      expect(await other.release({ ...moved, availableAt: new Date() })).toBe(
+        true,
+      );
+      // So does a host that registered no node at all.
+      const unplaced = new ExecutionJobsService(db);
+      const third = await unplaced.claimById({
+        jobId: job.id,
+        workerId: "third",
+      });
+      if (!third?.leaseToken) throw Error("No lease");
+      const last = {
+        jobId: job.id,
+        workerId: "third",
+        leaseToken: third.leaseToken,
+        leaseGeneration: third.leaseGeneration,
+      };
+      expect(await unplaced.heartbeat(last)).toBe(true);
+
+      // Due or running, it readmits nothing: the run stays parked.
+      await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+      const allocationOf = async () =>
+        (
+          await database
+            .selectFrom("workflow_runs")
+            .select("allocation_id")
+            .where("id", "=", work.runId)
+            .executeTakeFirstOrThrow()
+        ).allocation_id;
+      expect(await allocationOf()).toBe(work.allocationId);
+
+      // Compute does need the placement. The wait's end queues the next
+      // boundary while its own job still runs: nobody claims the boundary
+      // on the parked Allocation, and the run is readmitted for it at once.
+      const boundary = await onNode.enqueue({
+        tenantId: identity.tenantId,
+        workflowRunId: work.runId,
+        kind: "durable_boundary",
+        payload: {},
+      });
+      for (const claimer of [onNode, other, unplaced])
+        expect(
+          await claimer.claimById({ jobId: boundary.id, workerId: "early" }),
+        ).toBeNull();
+      await core.nodeRecovery.reconcileWorkflowWaits({ runId: work.runId });
+      const readmitted = await allocationOf();
+      expect(readmitted).not.toBe(work.allocationId);
+      expect(await unplaced.complete(last)).toBe(true);
+      const placed = await db
+        .selectFrom("execution_allocations")
+        .select(["status", "worker_node_id"])
+        .where("id", "=", readmitted ?? "")
+        .executeTakeFirstOrThrow();
+      expect(placed.status).toBe("active");
+      const claimer = placed.worker_node_id === lease.id ? onNode : other;
+      expect(
+        await claimer.claimById({ jobId: boundary.id, workerId: "resumed" }),
+      ).not.toBeNull();
+    },
+  );
+}
+
 it.skipIf(!db)(
   "retains the physical budget on teardown failure, then atomically readmits sharing runs once",
   async () => {
