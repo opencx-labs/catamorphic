@@ -5,6 +5,7 @@ import {
   type Carried,
   defineBatchStep,
   defineWorkflow,
+  type SessionChangedPaths,
   type SessionState,
   type WorkflowDefinition,
 } from "../src/index.js";
@@ -489,6 +490,44 @@ defineWorkflow(({ defineBoundary }) => ({
       run: ({ host }: BoundaryContext<OrderInput>) =>
         // @ts-expect-error family is a boolean.
         host["catamorphic.sessions"].read({ sessionId: "s", family: "yes" }),
+    }),
+  ],
+}));
+
+// The paths between two commits of a chat reach the next step typed: what
+// a setup workflow reads before it installs again.
+type BaseMove = { sessionId: string; previous: string; commit: string };
+
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<BaseMove>) =>
+        host["catamorphic.sessions"].changedPaths({
+          sessionId: input.sessionId,
+          from: input.previous,
+          to: input.commit,
+        }),
+    }),
+    defineBoundary({
+      run: ({ input }: BoundaryContext<SessionChangedPaths>) => ({
+        install:
+          !input.complete ||
+          input.truncated ||
+          input.paths.some((changed) => changed.endsWith("bun.lock")),
+      }),
+    }),
+  ],
+}));
+
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ host }: BoundaryContext<BaseMove>) =>
+        // @ts-expect-error Both commits are named.
+        host["catamorphic.sessions"].changedPaths({
+          sessionId: "s",
+          from: "a",
+        }),
     }),
   ],
 }));

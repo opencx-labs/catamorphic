@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, storedJson } from "@catamorphic/db";
 import { type Kysely, type RawBuilder, sql, type Transaction } from "kysely";
 
 /*
@@ -12,6 +12,12 @@ import { type Kysely, type RawBuilder, sql, type Transaction } from "kysely";
  */
 
 export const WORKSPACE_CHANGED_EVENT = "session.workspace-changed";
+
+/**
+ * `session.workspace-setup` (ADR 0355): a chat's workspace is being set
+ * up. Unlike a change, the turn waits for the runs this event starts.
+ */
+export const WORKSPACE_SETUP_EVENT = "session.workspace-setup";
 
 /** What happened to the workspace. */
 export type WorkspaceChange =
@@ -106,6 +112,135 @@ export async function recordSessionEvent(input: {
         ]),
     )
     .execute();
+}
+
+/** The chat as a session event describes it (`payload` less `detail`). */
+export interface SessionEventSnapshot {
+  projectId: string;
+  snapshot: { [key: string]: Json };
+}
+
+/**
+ * The chat's part of a session event the host builds before it records it
+ * (ADRs 0352, 0355), so who listens can be asked of exactly what will be
+ * stored: the same fields, under the same names, as the session events the
+ * database and {@link recordSessionEvent} write. Read in `db`'s
+ * transaction if any.
+ */
+export async function sessionEventSnapshot(input: {
+  db: Kysely<DB> | Transaction<DB>;
+  sessionId: string;
+  kind: string;
+}): Promise<SessionEventSnapshot> {
+  const session = await input.db
+    .selectFrom("agent_sessions")
+    .select([
+      "id",
+      "project_id",
+      "agent_id",
+      "external_user_id",
+      "chat_key",
+      "title",
+      "status",
+      "work_status",
+      "activity",
+      "parent_session_id",
+      "state_revision",
+      "authority_host_id",
+      "authority_revision",
+    ])
+    .where("id", "=", input.sessionId)
+    .executeTakeFirstOrThrow();
+  return {
+    projectId: session.project_id,
+    snapshot: {
+      sessionId: session.id,
+      agentId: session.agent_id,
+      externalUserId: session.external_user_id,
+      session: {
+        id: session.id,
+        key: session.chat_key,
+        title: session.title,
+        status: session.status,
+        workStatus: session.work_status,
+        activity: session.activity,
+        parentSessionId: session.parent_session_id,
+        stateRevision: Number(session.state_revision),
+        authorityHostId: session.authority_host_id,
+        authorityRevision: Number(session.authority_revision),
+      },
+      actor: { kind: "system", code: input.kind },
+      causation: [],
+    },
+  };
+}
+
+/** A session event the host built and has not recorded yet. */
+export interface PendingSessionEvent {
+  id: string;
+  projectId: string;
+  /** The chat it is about, and whose it is: what decides who may hear it. */
+  session: { id: string; externalUserId: string; agentId: string | null };
+  kind: string;
+  externalId: string;
+  occurredAt: string;
+  payload: Json;
+}
+
+/**
+ * Build one session event of `kind` for a chat, with `detail` (ADRs 0352,
+ * 0355). Nothing is recorded: the same payload is asked of who listens,
+ * then stored.
+ */
+export async function pendingSessionEvent(input: {
+  db: Kysely<DB> | Transaction<DB>;
+  sessionId: string;
+  kind: string;
+  detail: { [key: string]: Json };
+}): Promise<PendingSessionEvent> {
+  const chat = await sessionEventSnapshot(input);
+  const owner = chat.snapshot.externalUserId;
+  const agent = chat.snapshot.agentId;
+  return {
+    id: randomUUID(),
+    projectId: chat.projectId,
+    session: {
+      id: input.sessionId,
+      externalUserId: typeof owner === "string" ? owner : "",
+      agentId: typeof agent === "string" ? agent : null,
+    },
+    kind: input.kind,
+    externalId: randomUUID(),
+    occurredAt: new Date().toISOString(),
+    // As jsonb gives it back, so what is matched is what is stored.
+    payload: storedJson({ ...chat.snapshot, detail: input.detail }),
+  };
+}
+
+/**
+ * A session event as a bound workflow receives it: the envelope every
+ * Project Event is dispatched in. Its sequence is the database's to give,
+ * so a prospective one says 0.
+ */
+export function sessionEventInput(event: {
+  id: string;
+  projectId: string;
+  kind: string;
+  externalId: string;
+  occurredAt: string;
+  payload: Json;
+}): Json {
+  return {
+    id: event.id,
+    sequence: 0,
+    projectId: event.projectId,
+    source: "session",
+    kind: event.kind,
+    externalId: event.externalId,
+    occurredAt: event.occurredAt,
+    receivedAt: event.occurredAt,
+    payload: event.payload,
+  };
 }
 
 /**

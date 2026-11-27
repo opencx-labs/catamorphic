@@ -3,6 +3,11 @@ import type { RuntimeRequest } from "@catamorphic/agent-protocol";
 import { type DB, type Json, storedJson } from "@catamorphic/db";
 import type { Kysely, Transaction } from "kysely";
 import { toJson } from "../run-coordinator.js";
+import {
+  type SessionEventSnapshot,
+  sessionEventInput,
+  sessionEventSnapshot,
+} from "../workspace-events.js";
 
 /*
  * `session.request-opened` (ADR 0352): an agent asked for something its
@@ -20,10 +25,7 @@ export const REQUEST_OPENED_EVENT = "session.request-opened";
 type Executor = Kysely<DB> | Transaction<DB>;
 
 /** The chat as a session event describes it, read once per batch. */
-export interface RequestEventSession {
-  projectId: string;
-  snapshot: { [key: string]: Json };
-}
+export type RequestEventSession = SessionEventSnapshot;
 
 /** One request's event: the row to record, and what a workflow receives. */
 export interface RequestOpenedEvent {
@@ -51,49 +53,7 @@ export async function requestEventSession(
   db: Executor,
   sessionId: string,
 ): Promise<RequestEventSession> {
-  const session = await db
-    .selectFrom("agent_sessions")
-    .select([
-      "id",
-      "project_id",
-      "agent_id",
-      "external_user_id",
-      "chat_key",
-      "title",
-      "status",
-      "work_status",
-      "activity",
-      "parent_session_id",
-      "state_revision",
-      "authority_host_id",
-      "authority_revision",
-    ])
-    .where("id", "=", sessionId)
-    .executeTakeFirstOrThrow();
-  return {
-    projectId: session.project_id,
-    // The same fields, under the same names, as the session events the
-    // database and `recordSessionEvent` write.
-    snapshot: {
-      sessionId: session.id,
-      agentId: session.agent_id,
-      externalUserId: session.external_user_id,
-      session: {
-        id: session.id,
-        key: session.chat_key,
-        title: session.title,
-        status: session.status,
-        workStatus: session.work_status,
-        activity: session.activity,
-        parentSessionId: session.parent_session_id,
-        stateRevision: Number(session.state_revision),
-        authorityHostId: session.authority_host_id,
-        authorityRevision: Number(session.authority_revision),
-      },
-      actor: { kind: "system", code: REQUEST_OPENED_EVENT },
-      causation: [],
-    },
-  };
+  return sessionEventSnapshot({ db, sessionId, kind: REQUEST_OPENED_EVENT });
 }
 
 /** The event of one request that opened in `session`. */
@@ -135,17 +95,7 @@ export function requestOpenedEvent(
  * prospective one says 0.
  */
 export function requestEventInput(event: RequestOpenedEvent): Json {
-  return {
-    id: event.id,
-    sequence: 0,
-    projectId: event.projectId,
-    source: "session",
-    kind: REQUEST_OPENED_EVENT,
-    externalId: event.externalId,
-    occurredAt: event.occurredAt,
-    receivedAt: event.occurredAt,
-    payload: event.payload,
-  };
+  return sessionEventInput({ ...event, kind: REQUEST_OPENED_EVENT });
 }
 
 /** Record the events of requests that opened, in `db`'s transaction if any. */

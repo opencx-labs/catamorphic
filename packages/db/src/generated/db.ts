@@ -829,6 +829,7 @@ export interface ProjectEvents {
   received_at: Generated<Timestamp>;
   sequence: Generated<Int8>;
   source: string;
+  waited: Generated<boolean>;
 }
 
 export interface ProjectPlugins {
@@ -1426,6 +1427,7 @@ export interface WorkflowRuns {
   enrollment: Json | null;
   environment_name: string | null;
   error: string | null;
+  event_id: string | null;
   external_user_id: string | null;
   id: Generated<string>;
   input: Json | null;
@@ -1441,8 +1443,6 @@ export interface WorkflowRuns {
   queued_at: Timestamp | null;
   result: Json | null;
   session_artifact_id: string | null;
-  setup_build: string | null;
-  setup_session_id: string | null;
   started_at: Timestamp | null;
   state_version: Generated<Int8>;
   status: Generated<string>;

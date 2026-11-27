@@ -201,6 +201,7 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
   send: "Message a chat",
   wait: "Wait for a chat",
   read: "Read a chat",
+  changedPaths: "List changed files",
   answer: "Answer a chat",
   list: "List chats",
   fork: "Fork a chat",

@@ -7,14 +7,15 @@ import { TestSandboxes } from "@catamorphic/sandbox/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
 import {
+  environmentSetupCause,
   environmentSetupDue,
-  environmentSetupKey,
   parseSetupRecord,
   planWorkspaceSetup,
   runWorkspaceSetup,
   SETUP_PROCESS_NAME,
+  type SetupCause,
+  type SetupHookOutcome,
   SetupNetworkError,
-  type SetupReason,
   setupCause,
   setupClaimWaitMs,
   setupFingerprint,
@@ -93,50 +94,204 @@ describe("planning a workspace's setup", () => {
     ).toMatchObject({ environment: `${env} --prefer-offline` });
   });
 
-  it("fingerprints a setup workflow with the command, and plans it after the command (ADR 0324)", () => {
+  it("plans a setup's event after the command, and leaves the command's fingerprint as it was (ADR 0355)", () => {
     const plan = planWorkspaceSetup({
       environment: env,
-      workflow: "prepareReview",
+      hook: true,
       personalAllowed: false,
       recorded: null,
     });
     expect(plan).toEqual({
       record: {
-        environment: setupFingerprint(
-          environmentSetupKey({ command: env, workflow: "prepareReview" }),
-        ),
+        environment: setupFingerprint(env),
         personal: "none",
         base: "none",
       },
       environment: env,
-      workflow: "prepareReview",
+      hook: true,
     });
-    // A record from before the workflow was named sets up again.
-    expect(
-      planWorkspaceSetup({
-        environment: env,
-        workflow: "prepareReview",
-        personalAllowed: false,
-        recorded: {
-          environment: setupFingerprint(env),
-          personal: "none",
-          base: "none",
-        },
-      }),
-    ).not.toBeNull();
-    // Without a workflow, records stay as they were.
-    expect(environmentSetupKey({ command: env })).toBe(env);
+    // A listener that appears, or goes, sets nothing up again by itself.
+    const done = {
+      environment: setupFingerprint(env),
+      personal: "none",
+      base: "none",
+    };
+    for (const hook of [true, false])
+      expect(
+        planWorkspaceSetup({
+          environment: env,
+          hook,
+          personalAllowed: false,
+          recorded: done,
+        }),
+      ).toBeNull();
     if (!plan) throw new Error("unreachable");
-    // The command alone is not done until its workflow is.
+    // The command alone is not done until its event's runs are.
     expect(setupRecordAfter({ plan, part: "environment" })).toEqual({
-      environment: "none",
+      environment: "pending",
       personal: "none",
       base: "none",
     });
-    expect(setupRecordAfter({ plan, part: "workflow" })).toEqual({
+    expect(setupRecordAfter({ plan, part: "hook" })).toEqual({
       ...plan.record,
       personal: "none",
     });
+    // A command that was run and never followed by its runs is due again.
+    expect(
+      environmentSetupDue({
+        environment: env,
+        recorded: { environment: "pending", personal: "none", base: "none" },
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves the command out in a kept sandbox, and still records it done for the new base (ADR 0355)", () => {
+    const first = "a".repeat(40);
+    const second = "b".repeat(40);
+    const recorded = {
+      environment: setupFingerprint(env),
+      personal: setupFingerprint(mine),
+      base: first,
+    };
+    const plan = planWorkspaceSetup({
+      environment: env,
+      hook: true,
+      kept: true,
+      personalAllowed: false,
+      base: second,
+      recorded,
+    });
+    expect(plan).toEqual({
+      record: {
+        environment: setupFingerprint(env),
+        personal: "none",
+        base: second,
+      },
+      hook: true,
+    });
+    // Kept means nothing without a listener: the command runs as before.
+    expect(
+      planWorkspaceSetup({
+        environment: env,
+        kept: true,
+        personalAllowed: false,
+        base: second,
+        recorded,
+      }),
+    ).toMatchObject({ environment: env });
+    // A changed command is not run by itself there either.
+    expect(
+      planWorkspaceSetup({
+        environment: `${env} --prefer-offline`,
+        hook: true,
+        kept: true,
+        personalAllowed: false,
+        base: first,
+        recorded,
+      }),
+    ).toEqual({
+      record: {
+        environment: setupFingerprint(`${env} --prefer-offline`),
+        personal: "none",
+        base: first,
+      },
+      hook: true,
+    });
+  });
+
+  it("records an Environment with no command as set up by its event's runs, and keeps that (ADR 0355)", () => {
+    const base = "a".repeat(40);
+    const plan = planWorkspaceSetup({
+      hook: true,
+      personalAllowed: false,
+      base,
+      recorded: null,
+    });
+    expect(plan).toEqual({
+      record: { environment: "hook", personal: "none", base },
+      hook: true,
+    });
+    if (!plan) throw new Error("unreachable");
+    // Done on this base, with or without a listener now.
+    expect(environmentSetupDue({ base, recorded: plan.record })).toBe(false);
+    // The owner's own part alone keeps what the record says of the
+    // Environment's.
+    expect(
+      planWorkspaceSetup({
+        personal: mine,
+        personalAllowed: true,
+        base,
+        recorded: plan.record,
+      }),
+    ).toEqual({
+      record: {
+        environment: "hook",
+        personal: setupFingerprint(mine),
+        base,
+      },
+      personal: mine,
+    });
+    // The base moved: its last setup here is what the event says.
+    expect(
+      environmentSetupCause({
+        base: "b".repeat(40),
+        recorded: plan.record,
+        rebuilt: false,
+        moved: true,
+      }),
+    ).toEqual({ reason: "base-moved", previousBase: base });
+  });
+
+  it("says why an Environment's setup is due before anything runs, or that it is not (ADR 0355)", () => {
+    const base = "a".repeat(40);
+    const flags = { rebuilt: false, moved: false };
+    const done = {
+      environment: setupFingerprint(env),
+      personal: "none",
+      base,
+    };
+    expect(
+      environmentSetupCause({
+        environment: env,
+        base,
+        recorded: done,
+        ...flags,
+      }),
+    ).toBeNull();
+    expect(
+      environmentSetupCause({
+        environment: env,
+        base,
+        recorded: null,
+        ...flags,
+      }),
+    ).toEqual({ reason: "created" });
+    expect(
+      environmentSetupCause({
+        environment: env,
+        base,
+        recorded: null,
+        rebuilt: true,
+        moved: false,
+      }),
+    ).toEqual({ reason: "rebuilt" });
+    expect(
+      environmentSetupCause({
+        environment: `${env} --offline`,
+        base,
+        recorded: done,
+        ...flags,
+      }),
+    ).toEqual({ reason: "changed", previousBase: base });
+    // A command its runs never followed set nothing up: no earlier base.
+    expect(
+      environmentSetupCause({
+        environment: env,
+        base,
+        recorded: { ...done, environment: "pending" },
+        ...flags,
+      }),
+    ).toEqual({ reason: "created" });
   });
 
   it("runs the Environment's part again when the workspace's base moves", () => {
@@ -368,8 +523,8 @@ describe("planning a workspace's setup", () => {
     expect(
       setupCause({ plan: changed, recorded: first.record, ...flags }),
     ).toEqual({ reason: "changed", previousBase: base });
-    // An earlier try whose workflow did not finish left no setup behind.
-    const unfinished = { ...first.record, environment: "none" };
+    // An earlier try whose event's runs did not finish left no setup behind.
+    const unfinished = { ...first.record, environment: "pending" };
     expect(
       setupCause({
         plan: plan(base, unfinished),
@@ -495,14 +650,14 @@ describe("waiting for another session's setup (ADRs 0322, 0324)", () => {
   const minutes = (ms: number) => ms / 60_000;
 
   it("waits as long as every part the holder may run, each bounded by the setup's timeout", () => {
-    // Following an earlier run, the command, the workflow and the owner's
-    // part: four times 10 minutes, past the 25 a command alone needs.
+    // Following an earlier run, the command, its event's runs and the
+    // owner's part: four times 10 minutes, past the 25 a command alone needs.
     expect(
       minutes(
         setupClaimWaitMs({
           timeoutMinutes: 10,
           command: "pnpm install",
-          workflow: "prepareReview",
+          hook: true,
           personalAllowed: true,
         }),
       ),
@@ -512,7 +667,7 @@ describe("waiting for another session's setup (ADRs 0322, 0324)", () => {
         setupClaimWaitMs({
           timeoutMinutes: 10,
           command: "pnpm install",
-          workflow: "prepareReview",
+          hook: true,
           personalAllowed: false,
         }),
       ),
@@ -595,26 +750,28 @@ describe("running a workspace's setup", () => {
     expect(await read(id, "../runs")).toBe("ran in project\nran in project\n");
   }, 30_000);
 
-  it("runs the setup workflow after the command and before the owner's part, recording it only once it succeeded (ADR 0324)", async () => {
+  it("records the setup's event after the command and before the owner's part, done only once its runs succeeded (ADR 0355)", async () => {
     const { id } = await provider.createSandbox({});
-    const reasons: string[] = [];
+    const causes: SetupCause[] = [];
     let fails = true;
-    const workflow = {
-      name: "prepareReview",
-      run: async ({ reason }: { reason: SetupReason }) => {
-        reasons.push(reason);
-        await provider.executeCommand(id, "echo workflow >> ../runs", {
+    const hook = {
+      kept: false,
+      run: async ({ cause }: { cause: SetupCause }) => {
+        causes.push(cause);
+        await provider.executeCommand(id, "echo hook >> ../runs", {
           cwd: projectDir,
         });
         return fails
           ? {
               status: "failed" as const,
-              error: "the run failed: no trusted files",
+              error: "prepareReview (run r1) failed: no trusted files",
               timedOut: false,
             }
           : { status: "succeeded" as const };
       },
     };
+    const first = "c".repeat(40);
+    const second = "d".repeat(40);
     const setup = {
       provider,
       sandboxId: id,
@@ -623,52 +780,178 @@ describe("running a workspace's setup", () => {
       personal: "echo personal >> ../runs",
       personalAllowed: true,
       timeoutMinutes: 1,
-      workflow,
+      base: first,
+      hook,
     };
     const failed = await runWorkspaceSetup(setup);
     expect(failed).toMatchObject({
       status: "failed",
-      workflow: "prepareReview",
-      log: "the run failed: no trusted files",
-      parts: ["environment", "workflow", "personal"],
+      hook: true,
+      log: "prepareReview (run r1) failed: no trusted files",
+      parts: ["environment", "hook", "personal"],
     });
-    expect(await read(id, "../runs")).toBe("command\nworkflow\n");
+    expect(await read(id, "../runs")).toBe("command\nhook\n");
     if (failed.status !== "failed") throw new Error("unreachable");
-    expect(
-      workspaceSetupFailedNote({
-        outcome: failed,
-        timeoutMinutes: 30,
-        logPath: "/workspace/.work-session/setup.log",
-      }),
-    ).toContain(
-      "The setup workflow prepareReview (`setup.workflow` in .work/project.json) failed",
+    const note = workspaceSetupFailedNote({
+      outcome: failed,
+      timeoutMinutes: 30,
+      logPath: "/workspace/.work-session/setup.log",
+    });
+    expect(note).toContain(
+      "failed in the project's setup workflows (bound to the `session.workspace-setup` trigger)",
     );
+    expect(note).toContain("prepareReview (run r1) failed: no trusted files");
+    expect(note).not.toMatch(/[–—]/);
     // Not recorded: the next preparation runs all of it again.
     fails = false;
     expect(await runWorkspaceSetup(setup)).toEqual({ status: "succeeded" });
     expect(await read(id, "../runs")).toBe(
-      "command\nworkflow\ncommand\nworkflow\npersonal\n",
+      "command\nhook\ncommand\nhook\npersonal\n",
     );
     expect(await runWorkspaceSetup(setup)).toEqual({ status: "current" });
-    // The base moved: the workflow hears why it runs again.
-    expect(await runWorkspaceSetup({ ...setup, base: "d".repeat(40) })).toEqual(
-      { status: "succeeded" },
-    );
-    expect(reasons).toEqual(["created", "created", "base-moved"]);
-    // Naming another workflow changes the setup, as a new command does.
+    // The base moved: the event says why it is set up again, and on what.
+    expect(await runWorkspaceSetup({ ...setup, base: second })).toEqual({
+      status: "succeeded",
+    });
+    expect(causes).toEqual([
+      { reason: "created" },
+      { reason: "created" },
+      { reason: "base-moved", previousBase: first },
+    ]);
+    // A changed command is a changed setup.
     expect(
       await runWorkspaceSetup({
         ...setup,
-        base: "d".repeat(40),
-        workflow: { ...workflow, name: "prepareReviewV2" },
+        base: second,
+        environment: "echo command two >> ../runs",
       }),
     ).toEqual({ status: "succeeded" });
-    expect(reasons.at(-1)).toBe("changed");
+    expect(causes.at(-1)).toEqual({ reason: "changed", previousBase: second });
   }, 30_000);
 
-  it("runs a setup that is only a workflow", async () => {
+  it("runs nothing by itself in a kept sandbox: the event alone, then done for the new base (ADR 0355)", async () => {
     const { id } = await provider.createSandbox({});
-    const reasons: string[] = [];
+    const first = "a".repeat(40);
+    const second = "b".repeat(40);
+    const setup = {
+      provider,
+      sandboxId: id,
+      projectDir,
+      environment: "echo command >> ../runs",
+      personalAllowed: false,
+      timeoutMinutes: 1,
+    };
+    expect(await runWorkspaceSetup({ ...setup, base: first })).toEqual({
+      status: "succeeded",
+    });
+    const causes: SetupCause[] = [];
+    const outcomes: SetupHookOutcome[] = [
+      { status: "failed", error: "it failed", timedOut: false },
+      { status: "succeeded" },
+    ];
+    const hook = {
+      kept: true,
+      run: async ({ cause }: { cause: SetupCause }) => {
+        causes.push(cause);
+        return outcomes.shift() ?? { status: "succeeded" as const };
+      },
+    };
+    // A failed run leaves the earlier setup's record: asked again as it was.
+    expect(
+      await runWorkspaceSetup({ ...setup, base: second, hook }),
+    ).toMatchObject({ status: "failed", hook: true, parts: ["hook"] });
+    expect(
+      parseSetupRecord(await read(id, "../.work-session/setup.done")),
+    ).toMatchObject({ base: first });
+    expect(await runWorkspaceSetup({ ...setup, base: second, hook })).toEqual({
+      status: "succeeded",
+    });
+    expect(causes).toEqual([
+      { reason: "base-moved", previousBase: first },
+      { reason: "base-moved", previousBase: first },
+    ]);
+    // The command ran once, on the first base only.
+    expect(await read(id, "../runs")).toBe("command\n");
+    expect(
+      parseSetupRecord(await read(id, "../.work-session/setup.done")),
+    ).toEqual({
+      environment: setupFingerprint(setup.environment),
+      personal: "none",
+      base: second,
+    });
+    expect(await runWorkspaceSetup({ ...setup, base: second, hook })).toEqual({
+      status: "current",
+    });
+  }, 30_000);
+
+  it("records a setup done in the sandbox its event's runs left the chat with (ADR 0355)", async () => {
+    const kept = await provider.createSandbox({});
+    const made = await provider.createSandbox({});
+    const first = "a".repeat(40);
+    const second = "b".repeat(40);
+    const setup = {
+      provider,
+      projectDir,
+      environment: "echo command >> ../runs",
+      personalAllowed: false,
+      timeoutMinutes: 1,
+    };
+    expect(
+      await runWorkspaceSetup({ ...setup, sandboxId: kept.id, base: first }),
+    ).toEqual({ status: "succeeded" });
+    expect(
+      await runWorkspaceSetup({
+        ...setup,
+        sandboxId: kept.id,
+        base: second,
+        hook: {
+          kept: true,
+          // One of its runs asked for the setup's network: the command ran
+          // in a new sandbox while they waited, not done until they are.
+          run: async () => {
+            await provider.executeCommand(made.id, "mkdir -p project", {
+              cwd: "/workspace",
+            });
+            expect(
+              await runWorkspaceSetup({
+                ...setup,
+                sandboxId: made.id,
+                base: second,
+                hook: "under-way",
+              }),
+            ).toEqual({ status: "succeeded" });
+            expect(
+              parseSetupRecord(
+                await read(made.id, "../.work-session/setup.done"),
+              ),
+            ).toEqual({
+              environment: "pending",
+              personal: "none",
+              base: second,
+            });
+            return { status: "succeeded" as const, sandboxId: made.id };
+          },
+        },
+      }),
+    ).toEqual({ status: "succeeded" });
+    expect(await read(made.id, "../runs")).toBe("command\n");
+    expect(
+      parseSetupRecord(await read(made.id, "../.work-session/setup.done")),
+    ).toEqual({
+      environment: setupFingerprint(setup.environment),
+      personal: "none",
+      base: second,
+    });
+    // The kept one, gone by then in a real preparation, was not written to.
+    expect(
+      parseSetupRecord(await read(kept.id, "../.work-session/setup.done")),
+    ).toMatchObject({ base: first });
+  }, 30_000);
+
+  it("runs a setup that is only its event", async () => {
+    const { id } = await provider.createSandbox({});
+    const causes: SetupCause[] = [];
+    const base = "a".repeat(40);
     const setup = {
       provider,
       sandboxId: id,
@@ -676,17 +959,24 @@ describe("running a workspace's setup", () => {
       personalAllowed: false,
       timeoutMinutes: 1,
       rebuilt: true,
-      workflow: {
-        name: "prepareReview",
-        run: async ({ reason }: { reason: SetupReason }) => {
-          reasons.push(reason);
+      base,
+      hook: {
+        kept: false,
+        run: async ({ cause }: { cause: SetupCause }) => {
+          causes.push(cause);
           return { status: "succeeded" as const };
         },
       },
     };
     expect(await runWorkspaceSetup(setup)).toEqual({ status: "succeeded" });
     expect(await runWorkspaceSetup(setup)).toEqual({ status: "current" });
-    expect(reasons).toEqual(["rebuilt"]);
+    expect(causes).toEqual([{ reason: "rebuilt" }]);
+    expect(
+      parseSetupRecord(await read(id, "../.work-session/setup.done")),
+    ).toEqual({ environment: "hook", personal: "none", base });
+    // With nobody listening any more it is still set up.
+    const { hook: _hook, ...alone } = setup;
+    expect(await runWorkspaceSetup(alone)).toEqual({ status: "current" });
   }, 30_000);
 
   it("tells each command the commit it runs on, the one it last ran on, and why (ADR 0354)", async () => {
@@ -797,10 +1087,11 @@ describe("running a workspace's setup", () => {
       personalAllowed: true,
       timeoutMinutes: 1,
       phases,
-      workflow: {
-        name: "prepareReview",
+      // The wait for the event's runs is timed by whoever waits for them.
+      hook: {
+        kept: false,
         run: async () => {
-          timeline.push("workflow runs");
+          timeline.push("the event's runs");
           return { status: "succeeded" as const };
         },
       },
@@ -809,9 +1100,7 @@ describe("running a workspace's setup", () => {
     expect(timeline).toEqual([
       "start setup.environment",
       "end setup.environment",
-      "start setup.workflow",
-      "workflow runs",
-      "end setup.workflow",
+      "the event's runs",
       "start setup.personal",
       "end setup.personal",
     ]);

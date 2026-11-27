@@ -302,6 +302,7 @@ export type {
 } from "./secret-operations.js";
 export type {
   ModelUsageTotals,
+  SessionChangedPaths,
   SessionExecResult,
   SessionHostOperations,
   SessionRequest,

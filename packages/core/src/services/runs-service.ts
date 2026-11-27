@@ -358,14 +358,16 @@ export interface TriggerProductionRunInput {
 
 /**
  * Facts about a run only Work states, never taken from a caller's input:
- * the chat and workspace build a setup run sets up (ADR 0324).
+ * the Project Event whose delivery started it (ADR 0355).
  */
 interface RunInternalFacts {
-  setupFor?: { sessionId: string; build: string };
+  /** The event this run is a delivery of, stamped as `event_id`. */
+  eventId?: string;
   /**
    * An event the host delivers and no caller waits for (ADR 0337): the only
    * enrollment that may join a queued run alike it. Calls, synchronous
-   * fires and setup runs report their own run's outcome, so never join.
+   * fires and the runs of a waited event (ADR 0355) report their own run's
+   * outcome, so never join.
    */
   delivery?: true;
   /** The host kind whose dispatch starts this run (ADR 0327). */
@@ -380,6 +382,12 @@ export interface HostDispatch {
   kind: string;
   /** `async`: an event delivery no caller waits for, which may join. */
   mode?: "async" | "sync";
+  /**
+   * The Project Event this delivery is of (ADR 0355), stamped on the run
+   * it starts. A `waited` one has an emitter waiting for that run's own
+   * end, so it never joins another.
+   */
+  event?: { id: string; waited: boolean };
 }
 
 /**
@@ -553,7 +561,10 @@ function dispatchFacts(dispatch: HostDispatch | undefined): RunInternalFacts {
   if (!dispatch) return {};
   return {
     dispatchedKind: dispatch.kind,
-    ...(dispatch.mode === "async" ? { delivery: true as const } : {}),
+    ...(dispatch.event ? { eventId: dispatch.event.id } : {}),
+    ...(dispatch.mode === "async" && !dispatch.event?.waited
+      ? { delivery: true as const }
+      : {}),
   };
 }
 
@@ -1422,22 +1433,6 @@ export class RunsService {
     dispatch?: HostDispatch,
   ): Promise<Run> {
     return this.triggerEnabled(args, dispatchFacts(dispatch));
-  }
-
-  /**
-   * Start a chat's setup workflow through its project enablement (ADR
-   * 0324), stamped with the chat and the workspace build it sets up. Only
-   * Work's setup path calls this; the stamp is what lets the run's
-   * commands run in setup, so it never comes from a caller.
-   */
-  async triggerSetupRun(
-    args: TriggerProductionRunInput & {
-      enablementId: string;
-      setupFor: { sessionId: string; build: string };
-    },
-  ): Promise<Run> {
-    const { setupFor, ...run } = args;
-    return this.triggerEnabled(run, { setupFor });
   }
 
   private async triggerEnabled(
@@ -3151,12 +3146,9 @@ export class RunsService {
                     ),
                   ),
           };
-          // Only Work's setup path states these, at enrollment; starting a
-          // queued run never rewrites them (ADR 0324).
-          const setup = {
-            setup_session_id: internal.setupFor?.sessionId ?? null,
-            setup_build: internal.setupFor?.build ?? null,
-          };
+          // Only the event dispatcher states this, at enrollment; starting
+          // a queued run never rewrites it (ADR 0355).
+          const delivered = { event_id: internal.eventId ?? null };
           if (queued) {
             await trx
               .insertInto("workflow_runs")
@@ -3164,7 +3156,7 @@ export class RunsService {
                 id: runId,
                 ...row,
                 ...caller,
-                ...setup,
+                ...delivered,
                 environment_name: args.environment ?? null,
                 delivery_key: deliveryKey ?? null,
                 coalesce_key: coalesceKey,
@@ -3260,7 +3252,7 @@ export class RunsService {
                 id: runId,
                 ...row,
                 ...caller,
-                ...setup,
+                ...delivered,
                 allocation_id: allocation.id,
                 environment_name: admission.environmentName,
                 delivery_key: deliveryKey ?? null,

@@ -27,7 +27,7 @@ import {
   AgentDelegationDeniedError,
   AgentDelegationSettingsError,
   AgentSessionsService,
-  type SetupRunFact,
+  type SetupHooks,
 } from "../services/agent-sessions-service.js";
 import { projectChatIdentity } from "../services/chat-delivery.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
@@ -113,6 +113,33 @@ async function until(
     if (Date.now() > deadline) throw new Error(`Timed out waiting: ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
+}
+
+/**
+ * A project automation that listens for every setup's event (ADR 0355) and
+ * whose runs end at once: `record` sees each event Work records.
+ */
+function setupHooks(input: {
+  record: SetupHooks["events"]["record"];
+}): SetupHooks {
+  const listener = {
+    activationId: randomUUID(),
+    enablementId: randomUUID(),
+    workflowName: "prepareReview",
+    tenantId: "tenant",
+    environment: "prepared",
+    permissions: [],
+  };
+  return {
+    events: {
+      bound: async () => true,
+      listeners: async () => [listener],
+      record: input.record,
+      settle: async () => ({ status: "settled", runs: [], unstarted: [] }),
+      cancel: async () => {},
+    },
+    end: async () => {},
+  };
 }
 
 describe("subagents of a server agent (ADR 0322)", () => {
@@ -255,10 +282,11 @@ describe("subagents of a server agent (ADR 0322)", () => {
                 ].join("\n"),
               },
             },
-            // One whose setup is a command and a workflow (ADR 0324).
+            // One whose setup is a command, and whose event a project
+            // workflow listens for (ADR 0355).
             prepared: {
               workloads: ["agent"],
-              setup: { command: "true", workflow: "prepareReview" },
+              setup: { command: "true" },
             },
           },
           defaultEnvironment: "review",
@@ -641,26 +669,31 @@ describe("subagents of a server agent (ADR 0322)", () => {
 
   it("sets its workspace session's workspace up when a shared child's turn makes it", async () => {
     const calls: Array<{
-      setupFor: SetupRunFact;
-      input: Json;
-      /** The chats recording a setup run while it ran. */
+      /** The chat the setup's event is about. */
+      sessionId: string;
+      payload: Json;
+      /** The chats recording a setup while its event's runs ran. */
       recordedOn: string[];
     }> = [];
-    sessions.setSetupWorkflowRunner({
-      run: async (args) => {
-        const recordedOn = (
-          await db
-            .selectFrom("agent_sessions")
-            .select("id")
-            .where("project_id", "=", projectId)
-            .where("setup_run", "is not", null)
-            .execute()
-        ).map((row) => row.id);
-        calls.push({ setupFor: args.setupFor, input: args.input, recordedOn });
-        return { status: "succeeded" };
-      },
-      end: async () => {},
-    });
+    sessions.setSetupHooks(
+      setupHooks({
+        record: async ({ event }) => {
+          const recordedOn = (
+            await db
+              .selectFrom("agent_sessions")
+              .select("id")
+              .where("project_id", "=", projectId)
+              .where("setup_run", "is not", null)
+              .execute()
+          ).map((row) => row.id);
+          calls.push({
+            sessionId: event.session.id,
+            payload: event.payload,
+            recordedOn,
+          });
+        },
+      }),
+    );
     const parent = await sessions.create(identity, projectId, {
       workspace: { ref: "pr" },
       environment: "prepared",
@@ -702,14 +735,19 @@ describe("subagents of a server agent (ADR 0322)", () => {
       "both rest",
       async () => (await idle(parent.id)) && (await idle(child.session.id)),
     );
-    // The setup workflow ran for the parent's workspace, not the child.
+    // The setup's event was the parent's workspace's, not the child's.
     expect(calls).toHaveLength(2);
     const again = calls[1];
-    expect(again?.setupFor.sessionId).toBe(parent.id);
-    expect(again?.input).toMatchObject({
+    expect(again?.sessionId).toBe(parent.id);
+    expect(again?.payload).toMatchObject({
       sessionId: parent.id,
       agentId: "reviewer",
-      reason: "rebuilt",
+      detail: {
+        reason: "rebuilt",
+        environment: "prepared",
+        sandbox: "new",
+        previous: null,
+      },
     });
     expect(again?.recordedOn).toEqual([parent.id]);
     // The workspace's changes are the parent's: made, then made again.
@@ -738,13 +776,13 @@ describe("subagents of a server agent (ADR 0322)", () => {
 
   it("runs no setup that takes the sandbox's grants while another session's turn runs in it", async () => {
     let calls = 0;
-    sessions.setSetupWorkflowRunner({
-      run: async () => {
-        calls += 1;
-        return { status: "succeeded" };
-      },
-      end: async () => {},
-    });
+    sessions.setSetupHooks(
+      setupHooks({
+        record: async () => {
+          calls += 1;
+        },
+      }),
+    );
     const parent = await sessions.create(identity, projectId, {
       workspace: { ref: "pr" },
       environment: "prepared",

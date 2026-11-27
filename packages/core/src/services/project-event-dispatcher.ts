@@ -219,6 +219,9 @@ export class ProjectEventDispatcher {
                       workflows: [row.workflow_name],
                       mode: "async",
                       deliveryKey,
+                      // The run is stamped with its event, and a waited
+                      // event's run is its own (ADR 0355).
+                      event: { id: row.id, waited: row.waited },
                     })
                   ).runs.map((run) => run.runId);
             await this.db

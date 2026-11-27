@@ -18,6 +18,7 @@ import {
   intersectProjectPermissions,
   intersectScope,
   mayUseProject,
+  PROJECT_PRINCIPAL_ID,
 } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
@@ -157,7 +158,6 @@ import { SessionTerminalsService } from "./services/session-terminals-service.js
 import { SessionWaitsService } from "./services/session-waits-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { REQUEST_OPENED_EVENT } from "./services/sessions/request-events.js";
-import { runSetupWorkflow } from "./services/setup-workflow-runner.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import type {
@@ -170,6 +170,7 @@ import {
   UserNotificationsService,
   type UserNotificationTransport,
 } from "./services/user-notifications-service.js";
+import { WaitedEventsService } from "./services/waited-events.js";
 import { WatchersService } from "./services/watchers-service.js";
 import { WebhooksService } from "./services/webhooks-service.js";
 import { WorkWakeups } from "./services/work-wakeups.js";
@@ -1612,6 +1613,7 @@ export class CatamorphicCore {
               enablement: undefined,
               resolveMember: this.resolveMember,
             }),
+          projectManager: this.projectManager,
         },
       );
       this.sessionTerminals = new SessionTerminalsService({
@@ -1623,16 +1625,22 @@ export class CatamorphicCore {
         sessions: this.agentSessions,
         projectManager: this.projectManager,
       });
-      // Setup workflows run through their project enablement (ADR 0324).
+      // A workspace's setup is an event project workflows bind (ADR
+      // 0355): the turn waits for the runs it starts.
       const sessionExec = this.sessionExec;
-      this.agentSessions.setSetupWorkflowRunner({
-        run: (input) =>
-          runSetupWorkflow({
-            db: this.db,
-            runs: this.runs,
-            coordinator,
-            ...input,
-          }),
+      this.agentSessions.setSetupHooks({
+        events: new WaitedEventsService({
+          db: this.db,
+          triggers: this.triggers,
+          cancelRun: async ({ tenantId, runId, reason }) => {
+            await coordinator.cancel({
+              identity: { tenantId, externalUserId: PROJECT_PRINCIPAL_ID },
+              runId,
+              reason,
+            });
+          },
+          wakeups: this.wakeups,
+        }),
         end: (input) => sessionExec.endSetup(input),
       });
       this.sessionPreviews = new SessionPreviewsService({

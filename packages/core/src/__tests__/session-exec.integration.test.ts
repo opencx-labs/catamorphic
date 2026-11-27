@@ -17,12 +17,17 @@ import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CatamorphicCore } from "../core.js";
+import { startEventDispatcher } from "../event-dispatcher.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { projectChatIdentity } from "../services/chat-delivery.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
-import { recordWorkspaceGone } from "../services/workspace-events.js";
+import type { TriggerKindRuntime } from "../services/trigger-kinds.js";
+import {
+  recordWorkspaceGone,
+  WORKSPACE_SETUP_EVENT,
+} from "../services/workspace-events.js";
 import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -33,9 +38,10 @@ const ownedSandboxes = new TestSandboxes();
  * local-process sandboxes: `exec` in the chat's own sandbox, seeing its
  * checkout and a read-only copy of the program; a command longer than its
  * attempt parks the run and resumes it; a retry answers with the same
- * execution; who may run commands where; a setup workflow that runs before
- * a chat's first turn and again when its workspace is made again; and the
- * workspace events workflows react to.
+ * execution; who may run commands where; a workflow bound to a workspace's
+ * setup event (ADR 0355) that the first turn waits for, that decides in a
+ * kept workspace, and that runs again when the workspace is made again; and
+ * the workspace events workflows react to.
  */
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -57,14 +63,15 @@ export const execInChat = defineWorkflow(({ defineBoundary }) => ({
 
 export const prepareChat = defineWorkflow(({ defineBoundary }) => ({
   permissions: ["sessions:write"],
+  triggers: [trigger("session.workspace-setup", {})],
   steps: [
     defineBoundary({
-      run: ({ input, host }: BoundaryContext<{ sessionId: string; reason: string }>) =>
+      run: ({ input, host }: BoundaryContext<{ id: string; payload: { sessionId: string } }>) =>
         host["catamorphic.sessions"].exec({
-          sessionId: input.sessionId,
+          sessionId: input.payload.sessionId,
           command: "cp \\"$WORK_PROGRAM/skills/review/SKILL.md\\" TRUSTED.md && chmod u+w TRUSTED.md",
           in: "setup",
-          idempotencyKey: "trusted",
+          idempotencyKey: "trusted:" + input.id,
         }),
     }),
     defineBoundary({ run: ({ input }: BoundaryContext<unknown>) => input }),
@@ -72,12 +79,28 @@ export const prepareChat = defineWorkflow(({ defineBoundary }) => ({
 }));
 `;
 
+/** The session kind as a host registers it. */
+const workspaceSetup: TriggerKindRuntime = {
+  name: WORKSPACE_SETUP_EVENT,
+  modes: ["async"],
+  payloadJsonSchema: { type: "object" },
+  configJsonSchema: { type: "object" },
+  validatePayload: () => ({ ok: true }),
+  validateConfig: () => ({ ok: true }),
+};
+
 /** The Environment's setup command: whether the member's file is there. */
 const SETUP_COMMAND =
   "(test -e notes/personal.env && echo present || echo absent) >> ../personal-seen; echo command >> ../setup-order";
 
-/** What each setup run was started with, in order. */
+/** The setup event each of `prepareChat`'s runs was started with, in order. */
 const setupInputs: Array<Record<string, unknown>> = [];
+
+/** The payload of a setup event a run received. */
+function payloadOf(event: Record<string, unknown> | undefined) {
+  const payload = event?.payload;
+  return typeof payload === "object" && payload !== null ? payload : {};
+}
 
 /**
  * The workflow runtime, faked at the invocation: each boundary returns what
@@ -108,11 +131,11 @@ function invokeRuntime(invocation: {
       ? call(value.exec, { asked: true })
       : stepIndex === 0 && exportName === "prepareChat"
         ? call({
-            sessionId: value.sessionId,
+            sessionId: (payloadOf(value) as { sessionId?: string }).sessionId,
             command:
-              'cp "$WORK_PROGRAM/skills/review/SKILL.md" TRUSTED.md && chmod u+w TRUSTED.md',
+              'cp "$WORK_PROGRAM/skills/review/SKILL.md" TRUSTED.md && chmod u+w TRUSTED.md; (test -e notes/personal.env && echo present || echo absent) >> ../hook-saw; echo trusted >> ../setup-order',
             in: "setup",
-            idempotencyKey: `trusted-${String(value.reason)}`,
+            idempotencyKey: `trusted:${String(value.id)}`,
           })
         : { type: "completed", output: value };
   return Promise.resolve({
@@ -146,6 +169,8 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
   let core: CatamorphicCore;
   let db: ReturnType<typeof createDatabase>;
   let projectId: string;
+  /** `execInChat` as a project automation: whose runs a setup's are. */
+  let projectEnablementId: string;
   const adapter = new RecordingAdapter();
 
   const writeAndDeploy = async (files: Record<string, string>) => {
@@ -241,6 +266,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       ),
       sandboxProvider: provider,
       environmentProvider: testEnvironmentProvider(provider),
+      triggerKinds: [workspaceSetup],
       credentialVault: new MemoryCredentialVault(),
       resolveMemberIdentity: async ({ tenantId, externalUserId }) => ({
         tenantId,
@@ -267,6 +293,21 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       ".work/skills/review/SKILL.md": "# Review\n\nThe trusted procedure.\n",
       "notes/hello.txt": "hello from the checkout\n",
     });
+    const preview = await core.workflowEnablements.preview({
+      identity: root,
+      projectId,
+      workflowName: "execInChat",
+      owner: { type: "project" },
+    });
+    projectEnablementId = (
+      await core.workflowEnablements.create({
+        identity: root,
+        projectId,
+        workflowName: "execInChat",
+        owner: { type: "project" },
+        consentDigest: preview.consentDigest,
+      })
+    ).id;
   }, 180_000);
 
   afterAll(async () => {
@@ -352,7 +393,34 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       args: input.args,
     });
 
-  /** A project chat with a running workspace, mid-setup for `build`. */
+  /**
+   * Stamp a run as the dispatcher stamps one a setup's event started for a
+   * project automation (ADR 0355).
+   */
+  const stamp = (runId: string, event: string) =>
+    db
+      .updateTable("workflow_runs")
+      .set({ event_id: event, workflow_enablement_id: projectEnablementId })
+      .where("id", "=", runId)
+      .execute();
+
+  /** A setup under way, as `agent_sessions.setup_run` holds it. */
+  const setupRun = (input: {
+    event: string;
+    deadlineMs: number;
+    network?: boolean;
+    kept?: boolean;
+  }) =>
+    JSON.stringify({
+      event: input.event,
+      network: input.network === true,
+      kept: input.kept === true,
+      requested: false,
+      ownerAuthored: true,
+      deadline: new Date(Date.now() + input.deadlineMs).toISOString(),
+    });
+
+  /** A project chat with a running workspace, mid-setup for `event`. */
   async function settingUp(input: { deadlineMs: number; network?: boolean }) {
     const sessionId = (
       await sessions().create(
@@ -366,17 +434,10 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       idempotencyKey: "start",
       command: "true",
     });
-    const build = crypto.randomUUID();
+    const event = crypto.randomUUID();
     await db
       .updateTable("agent_sessions")
-      .set({
-        setup_run: JSON.stringify({
-          build,
-          network: input.network === true,
-          ownerAuthored: true,
-          deadline: new Date(Date.now() + input.deadlineMs).toISOString(),
-        }),
-      })
+      .set({ setup_run: setupRun({ event, ...input }) })
       .where("id", "=", sessionId)
       .execute();
     const runId = (
@@ -387,18 +448,14 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
         input: { exec: {} },
       })
     ).id;
-    await db
-      .updateTable("workflow_runs")
-      .set({ setup_session_id: sessionId, setup_build: build })
-      .where("id", "=", runId)
-      .execute();
+    await stamp(runId, event);
     const workspace = await sessions().personWorkspace({
       identity: root,
       projectId,
       sessionId,
       start: false,
     });
-    return { sessionId, build, runId, workspace };
+    return { sessionId, event, runId, workspace };
   }
 
   /** The setup's own network, as admission would give it (ADR 0257). */
@@ -616,24 +673,26 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
         args: args(projectChat, "e"),
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
-    // Setup's network is for the chat's own setup run alone (ADR 0257).
+    // Setup's network is for the runs of the chat's setup event alone (ADR
+    // 0257).
     await expect(
       call({
         caller: root,
         runId,
         args: { ...args(memberChat, "f"), in: "setup" },
       }),
-    ).rejects.toThrow(/only from the chat's setup workflow/);
+    ).rejects.toThrow(/only from a run the chat's setup event started/);
   }, 120_000);
 
-  it("runs in setup only for a run Work stamped as the chat's setup for the build in progress", async () => {
+  it("runs in setup only for a project automation's run the dispatcher stamped with the setup event under way", async () => {
     const sessionId = (
       await sessions().create(
         projectChatIdentity({ tenantId, projectId }),
         projectId,
       )
     ).id;
-    // The chat has a workspace, and Work is setting up its build `current`.
+    // The chat has a workspace, and Work is setting it up: its setup event
+    // is `current`.
     await runExec({
       sessionId,
       in: "session",
@@ -643,14 +702,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     const current = crypto.randomUUID();
     await db
       .updateTable("agent_sessions")
-      .set({
-        setup_run: JSON.stringify({
-          build: current,
-          network: false,
-          ownerAuthored: true,
-          deadline: new Date(Date.now() + 600_000).toISOString(),
-        }),
-      })
+      .set({ setup_run: setupRun({ event: current, deadlineMs: 600_000 }) })
       .where("id", "=", sessionId)
       .execute();
     const setupArgs = (idempotencyKey: string) => ({
@@ -669,28 +721,33 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
           ...(correlationKey ? { correlationKey } : {}),
         })
       ).id;
-    // A caller's run labelled like a setup run is an ordinary run.
-    const lookalike = await runOf(`work-setup:${sessionId}:${current}`);
+    const refused = /only from a run the chat's setup event started/;
+    // A caller's run labelled like the event's delivery is an ordinary run:
+    // a delivery key is a label, and only the dispatcher writes the stamp.
+    const lookalike = await runOf(`event:${crypto.randomUUID()}:${current}`);
     await expect(
       call({ caller: root, runId: lookalike, args: setupArgs("lookalike") }),
-    ).rejects.toThrow(/only from the chat's setup workflow/);
-    // A setup run for an earlier build of the workspace is refused too.
+    ).rejects.toThrow(refused);
+    // A run of an earlier setup's event is refused too.
     const stale = await runOf();
-    await db
-      .updateTable("workflow_runs")
-      .set({ setup_session_id: sessionId, setup_build: crypto.randomUUID() })
-      .where("id", "=", stale)
-      .execute();
+    await stamp(stale, crypto.randomUUID());
     await expect(
       call({ caller: root, runId: stale, args: setupArgs("stale") }),
-    ).rejects.toThrow(/only from the chat's setup workflow/);
-    // The run stamped for the build in progress may.
-    const stamped = await runOf();
+    ).rejects.toThrow(refused);
+    // So is a run the event started for anyone but the project: a member's
+    // own automation hears the event and never runs commands in the setup.
+    const members = await runOf();
     await db
       .updateTable("workflow_runs")
-      .set({ setup_session_id: sessionId, setup_build: current })
-      .where("id", "=", stamped)
+      .set({ event_id: current })
+      .where("id", "=", members)
       .execute();
+    await expect(
+      call({ caller: root, runId: members, args: setupArgs("member") }),
+    ).rejects.toThrow(refused);
+    // A project automation's run stamped with the event under way may.
+    const stamped = await runOf();
+    await stamp(stamped, current);
     await expect(
       call({ caller: root, runId: stamped, args: setupArgs("current") }),
     ).resolves.toMatchObject({ exitCode: 0, stdout: "in-setup\n" });
@@ -698,7 +755,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
   }, 120_000);
 
   it("ends a setup command when the setup's time is up, and stops what a setup run started when it ends", async () => {
-    const { sessionId, runId, build, workspace } = await settingUp({
+    const { sessionId, runId, event, workspace } = await settingUp({
       deadlineMs: 3_000,
     });
     const began = Date.now();
@@ -719,14 +776,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
 
     await db
       .updateTable("agent_sessions")
-      .set({
-        setup_run: JSON.stringify({
-          build,
-          network: false,
-          ownerAuthored: true,
-          deadline: new Date(Date.now() + 600_000).toISOString(),
-        }),
-      })
+      .set({ setup_run: setupRun({ event, deadlineMs: 600_000 }) })
       .where("id", "=", sessionId)
       .execute();
     // Little of its attempt is left: the command parks, still running.
@@ -747,7 +797,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       tenantId,
       projectId,
       sessionId,
-      build,
+      event,
       network: false,
     });
     const stopped = await actionOf(sessionId, "left-running");
@@ -772,7 +822,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     const spy = onSetupNetwork();
     try {
       // The spy gives the setup its network; admission fixed none here.
-      const { sessionId, runId, build, workspace } = await settingUp({
+      const { sessionId, runId, event, workspace } = await settingUp({
         deadlineMs: 600_000,
       });
       // Admission fixed the setup's egress on the chat's Allocation.
@@ -836,7 +886,7 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
           tenantId,
           projectId,
           sessionId,
-          build,
+          event,
           network: true,
         }),
       ).rejects.toThrow(/could not be returned to its Environment's network/);
@@ -1330,22 +1380,20 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
     expect(ran.result.trim()).toBe("1");
   }, 120_000);
 
-  it("runs a setup workflow before a chat's first turn and again in a workspace made again, and reports the workspace's changes", async () => {
-    await writeAndDeploy({
+  it("waits for the workflows bound to a workspace's setup event before a chat's first turn, lets them decide in a kept workspace, and sets up again in one made again (ADR 0355)", async () => {
+    const manifest = (command: string) => ({
       [PROJECT_MANIFEST_PATH]: JSON.stringify({
         environments: {
           dev: {
             workloads: ["agent", "workflow"],
             personalCredentials: true,
-            setup: {
-              command: SETUP_COMMAND,
-              workflow: "prepareChat",
-            },
+            setup: { command },
           },
         },
         defaultEnvironment: "dev",
       }),
     });
+    await writeAndDeploy(manifest(SETUP_COMMAND));
     const preview = await core.workflowEnablements.preview({
       identity: root,
       projectId,
@@ -1373,136 +1421,191 @@ describeIf("workflows run commands in a chat's workspace (ADR 0324)", () => {
       },
     });
     startWorkers();
-    const sessionId = (await sessions().create(root, projectId)).id;
-    const sent = await sessions().sendMessage(
-      root,
-      projectId,
-      sessionId,
-      "Review it",
-    );
-    expect(sent.turn.status).toBe("completed");
-    // The turn waited for it: the trusted file was in place first.
-    const workspace = await sessions().personWorkspace({
-      identity: root,
-      projectId,
-      sessionId,
-      start: false,
-    });
-    const read = await workspace.provider.executeCommand(
-      workspace.sandboxId,
-      "cat TRUSTED.md && cat ../setup-order",
-      { cwd: workspace.projectDirectory },
-    );
-    expect(read.result).toMatch(/The (trusted|revised) procedure\./);
-    expect(read.result).toContain("command");
-    expect(setupInputs.at(-1)).toMatchObject({
-      sessionId,
-      key: null,
-      reason: "created",
-      // Every chat stands on a base (ADR 0344): here the project's own main.
-      workspace: {
-        ref: "main",
-        commit: expect.stringMatching(/^[0-9a-f]{40}$/),
-      },
-    });
-    expect(setupInputs.at(-1)).toHaveProperty("agentId");
-    // Nothing is left that would let a later run use the setup's network.
-    const row = await db
-      .selectFrom("agent_sessions")
-      .select(["setup_run", "workspace_generation"])
-      .where("id", "=", sessionId)
-      .executeTakeFirstOrThrow();
-    expect(row).toEqual({ setup_run: null, workspace_generation: 1 });
-    // Work stamped its run with the chat and the build; no label carries it.
-    const setupRuns = await db
-      .selectFrom("workflow_runs")
-      .select(["setup_session_id", "setup_build", "correlation_key"])
-      .where("workflow_name", "=", "prepareChat")
-      .execute();
-    expect(setupRuns).toEqual([
-      {
-        setup_session_id: sessionId,
-        setup_build: expect.any(String),
-        correlation_key: null,
-      },
-    ]);
-
-    // A second turn in the same workspace sets nothing up again.
-    const before = setupInputs.length;
-    await sessions().sendMessage(root, projectId, sessionId, "Again");
-    expect(setupInputs.length).toBe(before);
-
-    // The setup changes: it runs again in this workspace, which holds the
-    // member's file by now; the file is taken out first and back after.
-    await writeAndDeploy({
-      [PROJECT_MANIFEST_PATH]: JSON.stringify({
-        environments: {
-          dev: {
-            workloads: ["agent", "workflow"],
-            personalCredentials: true,
-            setup: {
-              command: `${SETUP_COMMAND}; echo v2 >> ../setup-order`,
-              workflow: "prepareChat",
-            },
+    const dispatcher = startEventDispatcher({ core, pollEveryMs: 25 });
+    try {
+      const sessionId = (await sessions().create(root, projectId)).id;
+      const sent = await sessions().sendMessage(
+        root,
+        projectId,
+        sessionId,
+        "Review it",
+      );
+      expect(sent.turn.status).toBe("completed");
+      // The turn waited for it: the Environment's command ran, then the
+      // event's run put the trusted file in place.
+      const workspace = await sessions().personWorkspace({
+        identity: root,
+        projectId,
+        sessionId,
+        start: false,
+      });
+      const inWorkspace = async (command: string) =>
+        (
+          await workspace.provider.executeCommand(
+            workspace.sandboxId,
+            command,
+            { cwd: workspace.projectDirectory },
+          )
+        ).result;
+      expect(await inWorkspace("cat TRUSTED.md")).toMatch(
+        /The (trusted|revised) procedure\./,
+      );
+      expect(await inWorkspace("cat ../setup-order")).toBe(
+        "command\ntrusted\n",
+      );
+      const first = setupInputs.at(-1);
+      expect(first).toMatchObject({
+        source: "session",
+        kind: "session.workspace-setup",
+      });
+      expect(payloadOf(first)).toMatchObject({
+        sessionId,
+        session: { id: sessionId, key: null },
+        detail: {
+          reason: "created",
+          environment: "dev",
+          // Every chat stands on a base (ADR 0344): here the project's main.
+          workspace: {
+            ref: "main",
+            commit: expect.stringMatching(/^[0-9a-f]{40}$/),
           },
+          previous: null,
+          sandbox: "new",
         },
-        defaultEnvironment: "dev",
-      }),
-    });
-    await sessions().sendMessage(root, projectId, sessionId, "Changed");
-    expect(setupInputs.at(-1)).toMatchObject({ sessionId, reason: "changed" });
-    const seen = await workspace.provider.executeCommand(
-      workspace.sandboxId,
-      "cat ../personal-seen; cat notes/personal.env",
-      { cwd: workspace.projectDirectory },
-    );
-    expect(seen.result).toBe("absent\nabsent\nPERSONAL=1\n");
+      });
+      expect(payloadOf(first)).toHaveProperty("agentId");
+      const base = (
+        payloadOf(first) as { detail: { workspace: { commit: string } } }
+      ).detail.workspace.commit;
+      // Nothing is left that would let a later run use the setup's network.
+      const row = await db
+        .selectFrom("agent_sessions")
+        .select(["setup_run", "workspace_generation"])
+        .where("id", "=", sessionId)
+        .executeTakeFirstOrThrow();
+      expect(row).toEqual({ setup_run: null, workspace_generation: 1 });
+      // The dispatcher stamped its run with the event; no label carries it.
+      const setupRuns = await db
+        .selectFrom("workflow_runs")
+        .select(["event_id", "status", "correlation_key"])
+        .where("workflow_name", "=", "prepareChat")
+        .execute();
+      expect(setupRuns).toEqual([
+        {
+          event_id: String(first?.id),
+          status: "completed",
+          correlation_key: null,
+        },
+      ]);
+      const recorded = await db
+        .selectFrom("project_events")
+        .select(["id", "waited"])
+        .where("project_id", "=", projectId)
+        .where("kind", "=", "session.workspace-setup")
+        .execute();
+      expect(recorded).toEqual([{ id: String(first?.id), waited: true }]);
 
-    // The workspace goes with its machine, as node recovery records it:
-    // the next is set up again.
-    const { allocation_id } = await db
-      .selectFrom("agent_sessions")
-      .select("allocation_id")
-      .where("id", "=", sessionId)
-      .executeTakeFirstOrThrow();
-    await new ExecutionAllocationsService(db).release({
-      identity: root,
-      allocationId: allocation_id ?? "",
-      reason: "node_lost",
-    });
-    await recordWorkspaceGone({
-      db,
-      sessionId,
-      change: "lost",
-      reason: "machine-lost",
-    });
-    await sessions().sendMessage(root, projectId, sessionId, "Once more");
-    expect(setupInputs.at(-1)).toMatchObject({ sessionId, reason: "rebuilt" });
-    await core.runs.stopWorkers();
+      // A second turn in the same workspace sets nothing up again.
+      const before = setupInputs.length;
+      await sessions().sendMessage(root, projectId, sessionId, "Again");
+      expect(setupInputs.length).toBe(before);
 
-    const events = await db
-      .selectFrom("project_events")
-      .select(["payload"])
-      .where("project_id", "=", projectId)
-      .where("kind", "=", "session.workspace-changed")
-      .orderBy("sequence")
-      .execute();
-    const mine = events
-      .map((event) => event.payload as { sessionId: string; detail: unknown })
-      .filter((payload) => payload.sessionId === sessionId)
-      .map((payload) => payload.detail);
-    expect(mine).toEqual([
-      expect.objectContaining({
-        change: "ready",
-        reason: "created",
-        generation: 1,
-      }),
-      expect.objectContaining({ change: "lost", reason: "machine-lost" }),
-      expect.objectContaining({
-        change: "rebuilt",
+      // The setup's command changes. The workspace is one the chat already
+      // set up, so Work runs nothing there by itself: the event says it is
+      // kept and what it last set up on, and the workflow decides. The
+      // member's file, there by now, is taken out first and back after.
+      await writeAndDeploy(
+        manifest(`${SETUP_COMMAND}; echo v2 >> ../setup-order`),
+      );
+      await sessions().sendMessage(root, projectId, sessionId, "Changed");
+      expect(payloadOf(setupInputs.at(-1))).toMatchObject({
+        sessionId,
+        detail: {
+          reason: "changed",
+          previous: { commit: base },
+          sandbox: "kept",
+        },
+      });
+      expect(await inWorkspace("cat ../setup-order")).toBe(
+        "command\ntrusted\ntrusted\n",
+      );
+      expect(
+        await inWorkspace(
+          "cat ../personal-seen; cat ../hook-saw; cat notes/personal.env",
+        ),
+      ).toBe("absent\nabsent\nabsent\nPERSONAL=1\n");
+      // Recorded done for the changed command: nothing is due next turn.
+      const kept = setupInputs.length;
+      await sessions().sendMessage(root, projectId, sessionId, "Still here");
+      expect(setupInputs.length).toBe(kept);
+
+      // The workspace goes with its machine, as node recovery records it:
+      // the next is set up again, command first.
+      const { allocation_id } = await db
+        .selectFrom("agent_sessions")
+        .select("allocation_id")
+        .where("id", "=", sessionId)
+        .executeTakeFirstOrThrow();
+      await new ExecutionAllocationsService(db).release({
+        identity: root,
+        allocationId: allocation_id ?? "",
+        reason: "node_lost",
+      });
+      await recordWorkspaceGone({
+        db,
+        sessionId,
+        change: "lost",
         reason: "machine-lost",
-        generation: 2,
-      }),
-    ]);
+      });
+      await sessions().sendMessage(root, projectId, sessionId, "Once more");
+      expect(payloadOf(setupInputs.at(-1))).toMatchObject({
+        sessionId,
+        detail: { reason: "rebuilt", previous: null, sandbox: "new" },
+      });
+      const again = await sessions().personWorkspace({
+        identity: root,
+        projectId,
+        sessionId,
+        start: false,
+      });
+      expect(again.sandboxId).not.toBe(workspace.sandboxId);
+      expect(
+        (
+          await again.provider.executeCommand(
+            again.sandboxId,
+            "cat ../setup-order",
+            { cwd: again.projectDirectory },
+          )
+        ).result,
+      ).toBe("command\nv2\ntrusted\n");
+
+      const events = await db
+        .selectFrom("project_events")
+        .select(["payload"])
+        .where("project_id", "=", projectId)
+        .where("kind", "=", "session.workspace-changed")
+        .orderBy("sequence")
+        .execute();
+      const mine = events
+        .map((event) => event.payload as { sessionId: string; detail: unknown })
+        .filter((payload) => payload.sessionId === sessionId)
+        .map((payload) => payload.detail);
+      expect(mine).toEqual([
+        expect.objectContaining({
+          change: "ready",
+          reason: "created",
+          generation: 1,
+        }),
+        expect.objectContaining({ change: "lost", reason: "machine-lost" }),
+        expect.objectContaining({
+          change: "rebuilt",
+          reason: "machine-lost",
+          generation: 2,
+        }),
+      ]);
+    } finally {
+      await dispatcher.stop();
+      await core.runs.stopWorkers();
+    }
   }, 180_000);
 });

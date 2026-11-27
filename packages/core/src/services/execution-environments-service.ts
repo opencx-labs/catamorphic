@@ -153,8 +153,6 @@ export interface AdmittedCheckout {
 /** An Environment's setup as admission reads it (ADRs 0208, 0257). */
 export interface AdmittedSetup {
   command?: string;
-  /** A project workflow run after the command (ADR 0324). */
-  workflow?: string;
   timeoutMinutes: number;
   network?: { allow: readonly string[] };
   /** The secrets a setup with its own network runs with, and no others. */
@@ -925,9 +923,6 @@ export class ExecutionEnvironmentsService {
               setup: {
                 ...(definition.setup.command !== undefined
                   ? { command: definition.setup.command }
-                  : {}),
-                ...(definition.setup.workflow
-                  ? { workflow: definition.setup.workflow }
                   : {}),
                 timeoutMinutes:
                   definition.setup.timeoutMinutes ??

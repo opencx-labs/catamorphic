@@ -206,6 +206,26 @@ interface ScanResult {
   bindings: TriggerBindingInfo[];
 }
 
+/** One active project automation subscribed to a kind (ADR 0355). */
+export interface ProjectListener {
+  /** The activation a dispatch delivers the event to. */
+  activationId: string;
+  enablementId: string;
+  workflowName: string;
+  tenantId: string;
+  /** The Environment its runs are admitted on. */
+  environment: string;
+  /** The project permissions consented to when it was turned on. */
+  permissions: string[];
+}
+
+/** The Project Event a host dispatch delivers (ADR 0355). */
+interface DeliveredEvent {
+  id: string;
+  /** Its emitter waits for the runs it starts. */
+  waited: boolean;
+}
+
 interface PinnedRevision {
   commitSha: string;
   remoteBranch: string;
@@ -587,8 +607,24 @@ export class TriggersService {
     kind: string;
     payload: Json;
   }): Promise<boolean> {
+    return (await this.projectListeners(args)).length > 0;
+  }
+
+  /**
+   * The active project automations subscribed to `kind` (ADRs 0352, 0355),
+   * by activation: those whose trigger's config and `where` match
+   * `payload` as a dispatch matches them, or, without a payload, every one
+   * bound to the kind whatever it selects. A member's own automation is
+   * never one of them.
+   */
+  async projectListeners(args: {
+    executor?: Kysely<DB> | Transaction<DB>;
+    projectId: string;
+    kind: string;
+    payload?: Json;
+  }): Promise<ProjectListener[]> {
     const kind = this.registry.get(args.kind);
-    if (!kind) return false;
+    if (!kind) return [];
     const rows = await (args.executor ?? this.db)
       .selectFrom("workflow_enablement_triggers as activation")
       .innerJoin(
@@ -601,7 +637,16 @@ export class TriggersService {
         "definition.id",
         "activation.trigger_definition_id",
       )
-      .select(["definition.config", "definition.where_filters"])
+      .select([
+        "activation.id as activation_id",
+        "enablement.id as enablement_id",
+        "enablement.tenant_id",
+        "enablement.environment_name",
+        "enablement.permissions",
+        "definition.workflow_name",
+        "definition.config",
+        "definition.where_filters",
+      ])
       .where("definition.project_id", "=", args.projectId)
       .where("definition.trigger_kind", "=", kind.name)
       .where("activation.status", "=", "active")
@@ -613,17 +658,34 @@ export class TriggersService {
           eb("enablement.expires_at", ">", new Date()),
         ]),
       )
+      .orderBy("activation.id")
       .execute();
     // As stored, with U+FFFD for half an emoji or a NUL, like a dispatch.
-    const payload = storedJson(args.payload);
-    return rows.some(
-      (row) =>
-        (kind.matches?.({ config: row.config ?? {}, payload }) ?? true) &&
-        matchesAllWhere(
-          Array.isArray(row.where_filters) ? row.where_filters : [],
-          payload,
-        ),
-    );
+    const payload =
+      args.payload === undefined ? undefined : storedJson(args.payload);
+    return rows
+      .filter(
+        (row) =>
+          payload === undefined ||
+          ((kind.matches?.({ config: row.config ?? {}, payload }) ?? true) &&
+            matchesAllWhere(
+              Array.isArray(row.where_filters) ? row.where_filters : [],
+              payload,
+            )),
+      )
+      .map((row) => ({
+        activationId: row.activation_id,
+        enablementId: row.enablement_id,
+        workflowName: row.workflow_name,
+        tenantId: row.tenant_id,
+        environment: row.environment_name,
+        permissions: Array.isArray(row.permissions)
+          ? row.permissions.filter(
+              (permission): permission is string =>
+                typeof permission === "string",
+            )
+          : [],
+      }));
   }
 
   /**
@@ -667,9 +729,13 @@ export class TriggersService {
     );
   }
 
-  /** Host dispatcher entry point for one durable, consented activation. */
+  /**
+   * Host dispatcher entry point for one durable, consented activation.
+   * `event` names the Project Event being delivered (ADR 0355): the run it
+   * starts is stamped with it, which no caller's fire can do.
+   */
   async dispatchAtCommit(
-    args: FireArgs & PinnedRevision,
+    args: FireArgs & PinnedRevision & { event?: DeliveredEvent },
   ): Promise<TriggerFireResult> {
     const enablementId = args.enablementIds?.[0];
     const service = this.deps.workflowEnablements?.();
@@ -694,6 +760,7 @@ export class TriggersService {
       }),
       { commitSha: args.commitSha, remoteBranch: args.remoteBranch },
       false,
+      args.event,
     );
   }
 
@@ -702,6 +769,7 @@ export class TriggersService {
     scan: () => Promise<ScanResult>,
     pinned?: PinnedRevision,
     callerInitiated = true,
+    event?: DeliveredEvent,
   ): Promise<TriggerFireResult> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
     const kind = this.registry.get(args.kind);
@@ -902,6 +970,7 @@ export class TriggersService {
               interactive: args.interactive ?? false,
               pinned,
               callerInitiated,
+              event,
             }),
           ),
         );
@@ -941,6 +1010,7 @@ export class TriggersService {
     interactive: boolean;
     pinned?: PinnedRevision;
     callerInitiated: boolean;
+    event?: DeliveredEvent;
   }): Promise<TriggerFireOutcome> {
     const runArgs = {
       identity: args.identity,
@@ -956,7 +1026,11 @@ export class TriggersService {
     // host-only kind requires (ADR 0327); a caller's fire never does.
     const dispatch = args.callerInitiated
       ? undefined
-      : { kind: args.triggerKind, mode: args.mode };
+      : {
+          kind: args.triggerKind,
+          mode: args.mode,
+          ...(args.event ? { event: args.event } : {}),
+        };
     const run = args.enablementId
       ? await this.deps.runs.triggerWithEnablement(
           {

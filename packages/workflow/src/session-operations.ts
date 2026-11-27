@@ -359,6 +359,19 @@ export interface SessionExecResult {
    */
   outOfDisk?: string;
 }
+/** The paths that differ between two commits of a chat, as `changedPaths` answers. */
+export interface SessionChangedPaths {
+  /** Repository paths in Git's order: the first 2000 when more differ. */
+  paths: string[];
+  /** More than 2000 paths differ, so `paths` does not name them all. */
+  truncated: boolean;
+  /**
+   * False when the host's copy of the chat's repository does not hold one
+   * of the two commits: nothing was compared and `paths` is empty, so treat
+   * it as everything may have changed.
+   */
+  complete: boolean;
+}
 /** A message a start or a send delivered. */
 interface Sent {
   messageId: string;
@@ -457,6 +470,23 @@ export interface SessionHostOperations {
       order?: "newest" | "oldest";
     },
     SessionState
+  >;
+  /**
+   * The paths that differ between two commits of a chat, `from` and `to`
+   * by their full ids: every file added, modified or deleted, a moved file
+   * as both its old and its new path. The host reads them from its own copy
+   * of the chat's repository, so nothing runs in the workspace. At most
+   * 2000 paths come back, in Git's order; `truncated: true` says more
+   * differ. `complete: false` means that copy does not hold one of the two
+   * commits: nothing was compared, `paths` is empty, and everything may
+   * have changed. The same commit twice answers no paths. A setup workflow
+   * asks it for an event's `previous.commit` and `workspace.commit`, and
+   * installs again only when a lockfile is among the paths (or the answer
+   * is truncated or not complete).
+   */
+  changedPaths: Call<
+    Target & { from: string; to: string },
+    SessionChangedPaths
   >;
   /** Answer what an agent asked: a question's answers, or an approval. */
   answer: Call<
