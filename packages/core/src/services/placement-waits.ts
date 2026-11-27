@@ -6,6 +6,7 @@ import type {
 } from "@catamorphic/sandbox";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
+import type { WorkWakeups } from "./work-wakeups.js";
 
 /**
  * Why work waits for a machine (ADR 0258): none open to it had room
@@ -72,11 +73,16 @@ export const PLACEMENT_WAIT_FRESH_SECONDS = 120;
  * Work waiting for a machine (ADR 0258), in Postgres: written when
  * admission finds no machine, refreshed by every retry, and gone once the
  * work has its Allocation (in that transaction), its chat closes, or
- * nothing of it is queued. A host scaling machines with demand reads it.
+ * nothing of it is queued. A host scaling machines with demand reads it,
+ * and hears a `placement` hint in the process where a wait begins.
  * Retries back off from 5 to 30 seconds, by the database's clock.
  */
 export class PlacementWaitsService {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    /** Tells this process's host that work began waiting (ADR 0229). */
+    private readonly wakeups?: WorkWakeups,
+  ) {}
 
   /**
    * Record that the work waits, or refresh a wait already recorded: it
@@ -132,8 +138,36 @@ export class PlacementWaitsService {
           retry_at: sql<Date>`least(${backoff}, coalesce(${expiresAt}, ${backoff}))`,
         }),
       )
-      .returning(waitColumns)
+      .returning((eb) => [
+        ...waitColumns,
+        // A subquery reads the table as it stood before this statement:
+        // with no wait there that still counted, this one is new or
+        // started over.
+        eb
+          .not(
+            eb.exists(
+              eb
+                .selectFrom("placement_waits as earlier")
+                .select("earlier.root_workload_id")
+                .whereRef(
+                  "earlier.root_workload_id",
+                  "=",
+                  "placement_waits.root_workload_id",
+                )
+                .where(
+                  "earlier.last_tried_at",
+                  ">",
+                  sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`,
+                ),
+            ),
+          )
+          .as("began"),
+      ])
       .executeTakeFirstOrThrow();
+    // New demand for whoever makes machines. A refresh is none: it changes
+    // nothing a plan reads. The caller's transaction may not have committed
+    // yet, which a waiter's quick polls after a hint allow for.
+    if (row.began) this.wakeups?.notify("placement");
     return waitFromRow(row);
   }
 

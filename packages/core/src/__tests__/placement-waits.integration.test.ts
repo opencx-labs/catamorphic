@@ -27,6 +27,7 @@ import {
 import { PlacementWaitsService } from "../services/placement-waits.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { WorkWakeups } from "../services/work-wakeups.js";
 import { EnvironmentCapacityError } from "../services/worker-capacity.js";
 import { RecordingAdapter } from "./recording-adapter.js";
 
@@ -75,6 +76,11 @@ describe("chats waiting for a machine (ADR 0258)", () => {
   let worker: { stop(): Promise<void> };
   const adapter = new RecordingAdapter();
   const allocations = new ExecutionAllocationsService(db);
+  const wakeups = new WorkWakeups();
+  let placementHints = 0;
+  wakeups.subscribe("placement", () => {
+    placementHints += 1;
+  });
 
   const waitOf = (sessionId: string) =>
     db
@@ -175,6 +181,7 @@ describe("chats waiting for a machine (ADR 0258)", () => {
         list: () => [agent],
       },
       nativeAgentCheckout: { resolve: () => ({ path: tmpDir, owned: false }) },
+      wakeups,
     });
     worker = sessions.startWorker({
       resolveIdentity: async (args) =>
@@ -323,6 +330,97 @@ describe("chats waiting for a machine (ADR 0258)", () => {
     expect((await turnsOf(chat.sessionId)).map((turn) => turn.status)).toEqual([
       "cancelled",
     ]);
+  }, 30_000);
+
+  it("hints that work began waiting, and not each time the wait is tried again", async () => {
+    const wakeups = new WorkWakeups();
+    let heard = 0;
+    wakeups.subscribe("placement", () => {
+      heard += 1;
+    });
+    const waits = new PlacementWaitsService(db, wakeups);
+    const rootWorkloadId = "22222222-2222-4222-8222-222222222222";
+    const record = () =>
+      waits.record({
+        tenantId,
+        projectId,
+        workloadKind: "workflow",
+        rootWorkloadId,
+        target: {
+          environmentName: "review",
+          reason: "capacity",
+          pool: {},
+          owner: null,
+          key: null,
+          requirements: { resources: {}, capabilities: [] },
+          waitMinutes: 30,
+        },
+        limitMinutes: 30,
+      });
+    await record();
+    expect(heard).toBe(1);
+    // A retry refreshes the wait: nothing a plan reads changed.
+    await record();
+    await record();
+    expect(heard).toBe(1);
+    // A wait nobody tried for a while starts over, and is demand again.
+    await db
+      .updateTable("placement_waits")
+      .set({ last_tried_at: sql`now() - interval '5 minutes'` })
+      .where("root_workload_id", "=", rootWorkloadId)
+      .execute();
+    await record();
+    expect(heard).toBe(2);
+    // The hint comes with the write, inside the caller's transaction too.
+    await waits.clear({ rootWorkloadIds: [rootWorkloadId] });
+    await db.transaction().execute(async (transaction) => {
+      await waits.record({
+        tenantId,
+        projectId,
+        workloadKind: "workflow",
+        rootWorkloadId,
+        target: {
+          environmentName: "review",
+          reason: "unavailable",
+          pool: {},
+          owner: null,
+          key: null,
+          requirements: { resources: {}, capabilities: [] },
+          waitMinutes: 30,
+        },
+        limitMinutes: null,
+        transaction,
+      });
+      expect(heard).toBe(3);
+    });
+    await waits.clear({ rootWorkloadIds: [rootWorkloadId] });
+  });
+
+  it("hints that a chat began waiting, when it is created and when its turn finds no machine", async () => {
+    machines.state = "full";
+    const before = placementHints;
+    const chat = await sessions.chatForKey(alice, projectId, {
+      key: "pr-hint",
+      environment: "review",
+    });
+    // Created with no machine: its wait is recorded with it.
+    expect(placementHints).toBe(before + 1);
+    await send(alice, chat.sessionId, "Review this");
+    await retryNow(chat.sessionId);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Its retries refresh the wait: no more hints.
+    expect(placementHints).toBe(before + 1);
+    // Forgotten and found waiting again by its queued turn: a hint.
+    await db
+      .deleteFrom("placement_waits")
+      .where("root_workload_id", "=", chat.sessionId)
+      .execute();
+    await vi.waitFor(() => expect(placementHints).toBe(before + 2), {
+      timeout: 5_000,
+    });
+    await sessions.archive(alice, projectId, chat.sessionId, {
+      confirmStop: true,
+    });
   }, 30_000);
 
   it("fails a waiting chat's turn when its Environment can no longer take it", async () => {

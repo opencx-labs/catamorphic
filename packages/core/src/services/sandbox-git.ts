@@ -161,6 +161,11 @@ export async function seedSandboxRepository(input: {
    * only when the checkout lacks it.
    */
   fetchBase?: () => Promise<boolean>;
+  /**
+   * Runs the seeding itself, once the checkout is known to need it and
+   * its base was fetched: a caller that times it (ADR 0354) wraps it.
+   */
+  restoring?: (work: () => Promise<void>) => Promise<void>;
 }): Promise<{ seeded: boolean }> {
   const base = shellQuote(`${input.base}^{commit}`);
   const current = await input.provider.executeCommand(
@@ -186,6 +191,30 @@ export async function seedSandboxRepository(input: {
     throw new Error("The session's branch cannot be checked out");
   const holdsBase =
     lines.includes("holds-base") || ((await input.fetchBase?.()) ?? false);
+  const restore = () => restoreSessionWork({ ...input, holdsBase });
+  await (input.restoring ? input.restoring(restore) : restore());
+  return { seeded: true };
+}
+
+/**
+ * Put the session's saved work in a checkout (ADR 0344): its branch at its
+ * HEAD and what it had not committed, uploaded as one pack that leaves out
+ * the base when the checkout holds it already.
+ */
+async function restoreSessionWork(input: {
+  provider: SandboxProvider;
+  sandboxId: string;
+  projectDir: string;
+  sessionCopyPath: string;
+  checkpoint: string;
+  head: string;
+  base: string;
+  branch: string;
+  originUrl: string | null;
+  afterSetup?: boolean;
+  holdsBase: boolean;
+}): Promise<void> {
+  const { holdsBase } = input;
   const tree = (
     await nativeGit(input.sessionCopyPath, [
       "rev-parse",
@@ -233,7 +262,6 @@ export async function seedSandboxRepository(input: {
       originScript(input.originUrl),
     ].join(" && "),
   });
-  return { seeded: true };
 }
 
 /**

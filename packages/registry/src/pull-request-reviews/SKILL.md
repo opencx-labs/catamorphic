@@ -215,6 +215,48 @@ remove it to record no stalls.
 The review doctrine. Edit it to match the team: what matters in this
 codebase, which tests are slow, what never to touch.
 
+## Sizing a reviewer that starts subagents
+
+A reviewer may start subagents (`spawn_subsession`), which work in its
+workspace by default: the same sandbox and checkout, with no machine or
+setup of their own (ADR 0322). `delegation.maxConcurrentChildren` in
+`reviewer.json` bounds how many of its subagents run at once: 10 when not
+set, 100 at most. A spawn over the limit is refused, not queued: the
+reviewer is told to wait for one to finish or stop one, then start the
+next. Set it to the fan-out the doctrine asks for, such as
+`"delegation": { "maxConcurrentChildren": 6 }`.
+
+The sandbox's limits do not grow with the fan-out. Every subagent's
+commands run in the one command container, which `requirements.resources`
+limits: with `commands` apart and no limits named there or on the machine,
+1 CPU and 1 GiB (`cpuMillis: 1000`, `memoryMb: 1024`). A reviewer whose
+harness runs in the sandbox also runs every subagent's harness in its one
+agent container, which `commands.agentResources` limits: 1 CPU and 2 GiB by
+default. The built-in reviewer and its subagents run on the control plane
+and have no agent container. Without `commands` apart (the OpenCode
+reviewer), harnesses and commands share the one sandbox that
+`requirements.resources` limits. Raise the limits with the fan-out, in the
+`review` Environment:
+
+```json
+"requirements": {
+  "containers": true,
+  "resources": {
+    "commandTimeoutSeconds": 1800,
+    "cpuMillis": 8000,
+    "memoryMb": 16384
+  }
+},
+"commands": {
+  "separate": true,
+  "connections": ["git"],
+  "agentResources": { "cpuMillis": 4000, "memoryMb": 8192 }
+}
+```
+
+Leave `agentResources` out for the built-in reviewer. A machine reserves
+the sum of both, so the review pool's machines must be at least that large.
+
 ## An open model: OpenCode
 
 The `pull-request-reviews-opencode` pack makes the reviewer OpenCode, which

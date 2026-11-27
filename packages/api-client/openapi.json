@@ -26511,6 +26511,26 @@
                             },
                             "required": ["runner", "harness"],
                             "additionalProperties": false
+                          },
+                          "phases": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "phase": {
+                                  "type": "string"
+                                },
+                                "startedAt": {
+                                  "type": "string"
+                                },
+                                "endedAt": {
+                                  "nullable": true,
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["phase", "startedAt", "endedAt"],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -26523,7 +26543,8 @@
                           "completedAt",
                           "progressAt",
                           "stalledAt",
-                          "diagnostics"
+                          "diagnostics",
+                          "phases"
                         ],
                         "additionalProperties": false
                       }

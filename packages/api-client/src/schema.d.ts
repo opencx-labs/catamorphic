@@ -8402,6 +8402,11 @@ export interface paths {
                                     runner: string;
                                     harness: string;
                                 } | null;
+                                phases: {
+                                    phase: string;
+                                    startedAt: string;
+                                    endedAt: string | null;
+                                }[];
                             }[];
                         };
                     };

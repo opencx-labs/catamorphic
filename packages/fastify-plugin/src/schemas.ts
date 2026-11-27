@@ -2179,7 +2179,10 @@ export const AgentSessionDetailSchema = AgentSessionSchema.extend({
   turn: TurnProgressSchema.nullable(),
 });
 
-/** A turn's attempts with their diagnostics (ADR 0333). */
+/**
+ * A turn's attempts with their diagnostics (ADR 0333) and how long each
+ * part of their preparation took (ADR 0354).
+ */
 export const TurnAttemptsSchema = z.object({
   attempts: z.array(
     z.object({
@@ -2195,6 +2198,21 @@ export const TurnAttemptsSchema = z.object({
       diagnostics: z
         .object({ runner: z.string(), harness: z.string() })
         .nullable(),
+      /**
+       * The phases of its preparation, oldest first: `machine.wait`,
+       * `workspace.wait`, `sandbox.create`, `sandbox.start`,
+       * `workspace.checkout`, `workspace.restore`, `setup.environment`,
+       * `setup.workflow`, `setup.personal`, `harness.start` and
+       * `harness.first-output`, each where it applied. `endedAt` is null
+       * while a phase runs.
+       */
+      phases: z.array(
+        z.object({
+          phase: z.string(),
+          startedAt: z.string(),
+          endedAt: z.string().nullable(),
+        }),
+      ),
     }),
   ),
 });

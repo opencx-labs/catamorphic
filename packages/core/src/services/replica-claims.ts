@@ -107,6 +107,8 @@ export interface HeldReplicaClaim {
  * found lost by a renewal, `signal` aborts and the call rejects with
  * {@link ReplicaClaimLostError}, even if the operation ignores the signal.
  * Operations check the signal before each write that must stay exclusive.
+ * `onWait` is called once when the claim is found held, and the function
+ * it answers with once the wait is over, however it ended.
  */
 export async function withReplicaClaim<T>(input: {
   db: Kysely<DB>;
@@ -114,6 +116,7 @@ export async function withReplicaClaim<T>(input: {
   ttlSeconds?: number;
   waitMs?: number;
   pollMs?: number;
+  onWait?: () => Promise<() => Promise<void>>;
   operation: (claim: HeldReplicaClaim) => Promise<T>;
 }): Promise<T> {
   const ttlSeconds = input.ttlSeconds ?? 60;
@@ -127,19 +130,26 @@ export async function withReplicaClaim<T>(input: {
     async (span) => {
       const deadline = Date.now() + (input.waitMs ?? 0);
       let waited = false;
-      while (
-        !(await takeReplicaClaim({
-          db: input.db,
-          name: input.name,
-          holder,
-          ttlSeconds,
-        }))
-      ) {
-        if (Date.now() >= deadline) throw new ReplicaClaimBusyError(input.name);
-        waited = true;
-        await new Promise((resolve) =>
-          setTimeout(resolve, input.pollMs ?? 200),
-        );
+      let waitOver: (() => Promise<void>) | undefined;
+      try {
+        while (
+          !(await takeReplicaClaim({
+            db: input.db,
+            name: input.name,
+            holder,
+            ttlSeconds,
+          }))
+        ) {
+          if (Date.now() >= deadline)
+            throw new ReplicaClaimBusyError(input.name);
+          if (!waited) waitOver = await input.onWait?.();
+          waited = true;
+          await new Promise((resolve) =>
+            setTimeout(resolve, input.pollMs ?? 200),
+          );
+        }
+      } finally {
+        await waitOver?.();
       }
       span.setAttribute("catamorphic.claim.waited", waited);
       const lost = new AbortController();

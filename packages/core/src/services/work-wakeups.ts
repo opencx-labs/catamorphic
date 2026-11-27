@@ -1,11 +1,18 @@
 /**
  * What durable work a hint is about: queued jobs, agent turns, project
- * events, session events a live stream may be waiting for, or a change
+ * events, session events a live stream may be waiting for, a change
  * lists of chats show (anything but streamed text and progress on an
  * item: a chat's fields, its attention or visibility, a turn's status or
- * activity, a step, a request, a watcher).
+ * activity, a step, a request, a watcher), or work that began waiting for
+ * a machine.
  */
-export type WorkTopic = "execution" | "agent" | "events" | "sessions" | "chats";
+export type WorkTopic =
+  | "execution"
+  | "agent"
+  | "events"
+  | "sessions"
+  | "chats"
+  | "placement";
 
 /** One wait for the next hint on a key; cancelled once it no longer waits. */
 export interface Wakeup {

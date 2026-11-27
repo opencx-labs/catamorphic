@@ -42,6 +42,7 @@ import {
 import { seedSandboxBase } from "./sandbox-git.js";
 import type { SecretsService } from "./secrets-service.js";
 import { SecretMask, secretForms } from "./sessions/secret-mask.js";
+import type { WorkWakeups } from "./work-wakeups.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -241,9 +242,11 @@ export class CacheFillsService {
       retentionDays: number;
       /** How often a running fill renews its claim; a quarter of it by default. */
       claimRenewMs?: number;
+      /** Hears that a fill began waiting for a machine (ADR 0229). */
+      wakeups?: WorkWakeups;
     },
   ) {
-    this.placementWaits = new PlacementWaitsService(deps.db);
+    this.placementWaits = new PlacementWaitsService(deps.db, deps.wakeups);
   }
 
   /**

@@ -21,7 +21,7 @@ import {
   type WorkExecutionSettings,
   workExecution,
 } from "../execution-config.js";
-import { startDiskCare } from "./disk-care.js";
+import { RUNNING_TIME_FILE, startDiskCare } from "./disk-care.js";
 import { HarnessSignIns } from "./harness-sign-ins.js";
 import { removeMachineSignIns, signInCapabilities } from "./sign-ins.js";
 import { startVolumePruning } from "./volume-pruning.js";
@@ -220,7 +220,8 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     log,
   });
   // Its disk, measured and reported with its offer and its renewals, and
-  // what Work left there removed (ADR 0336).
+  // what Work left there removed (ADR 0336). The time it was stopped does
+  // not count against what it keeps (ADR 0350).
   const diskCare = startDiskCare({
     provider,
     ...(execution.diskFloorMb !== undefined
@@ -230,6 +231,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
       ? { criticalMb: execution.diskCriticalMb }
       : {}),
     graceMs: execution.imageRetentionMs,
+    runningFile: path.join(options.dataDir, RUNNING_TIME_FILE),
     log,
   });
   await diskCare.measure();

@@ -14,10 +14,12 @@ import {
   runWorkspaceSetup,
   SETUP_PROCESS_NAME,
   SetupNetworkError,
-  type SetupWorkflowReason,
+  type SetupReason,
+  setupCause,
   setupClaimWaitMs,
   setupFingerprint,
   setupRecordAfter,
+  setupVariables,
   workspaceSetupFailedNote,
   workspaceSetupNetworkRefusedNote,
   workspaceSetupScript,
@@ -282,8 +284,10 @@ describe("planning a workspace's setup", () => {
       }),
     ).toEqual({ ...plan.record, personal: "none" });
     expect(setupRecordAfter({ plan, part: "personal" })).toEqual(plan.record);
+    const cause = { reason: "created" as const };
     const environmentOnly = workspaceSetupScript({
       plan,
+      cause,
       parts: ["environment"],
     });
     expect(environmentOnly).toContain(`'Environment setup'`);
@@ -292,7 +296,7 @@ describe("planning a workspace's setup", () => {
       JSON.stringify(setupRecordAfter({ plan, part: "environment" })),
     );
     expect(environmentOnly).not.toContain(JSON.stringify(plan.record));
-    const both = workspaceSetupScript({ plan });
+    const both = workspaceSetupScript({ plan, cause });
     expect(both.indexOf(`'Personal setup'`)).toBeLessThan(
       both.indexOf(JSON.stringify(plan.record)),
     );
@@ -308,6 +312,7 @@ describe("planning a workspace's setup", () => {
         },
         environment: env,
       },
+      cause: { reason: "created" },
     });
     expect(script).toContain(sandboxSecretsPrelude());
     expect(script).toContain('bash -e "$2"');
@@ -316,6 +321,123 @@ describe("planning a workspace's setup", () => {
     expect(script).toContain('rm -f "$work_session/setup/personal.sh"');
     expect(script.indexOf("work_part ")).toBeLessThan(
       script.indexOf("setup.done.next"),
+    );
+  });
+
+  it("says why a setup runs and which base it last ran on (ADR 0354)", () => {
+    const base = "a".repeat(40);
+    const next = "b".repeat(40);
+    const plan = (
+      on: string,
+      recorded: Parameters<typeof setupCause>[0]["recorded"],
+    ) => {
+      const planned = planWorkspaceSetup({
+        environment: env,
+        personalAllowed: false,
+        base: on,
+        recorded,
+      });
+      if (!planned) throw new Error("Nothing to set up");
+      return planned;
+    };
+    const flags = { rebuilt: false, moved: false };
+    // A new workspace: nothing set up here, so no earlier base.
+    const first = plan(base, null);
+    expect(setupCause({ plan: first, recorded: null, ...flags })).toEqual({
+      reason: "created",
+    });
+    expect(
+      setupCause({ plan: first, recorded: null, rebuilt: true, moved: false }),
+    ).toEqual({ reason: "rebuilt" });
+    expect(
+      setupCause({ plan: first, recorded: null, rebuilt: true, moved: true }),
+    ).toEqual({ reason: "base-moved" });
+    // Set up before, on another base: the base it ran on then.
+    const moved = plan(next, first.record);
+    expect(
+      setupCause({ plan: moved, recorded: first.record, ...flags }),
+    ).toEqual({ reason: "base-moved", previousBase: base });
+    // Set up before on this base, with another command.
+    const changed = planWorkspaceSetup({
+      environment: `${env} --prefer-offline`,
+      personalAllowed: false,
+      base,
+      recorded: first.record,
+    });
+    if (!changed) throw new Error("Nothing to set up");
+    expect(
+      setupCause({ plan: changed, recorded: first.record, ...flags }),
+    ).toEqual({ reason: "changed", previousBase: base });
+    // An earlier try whose workflow did not finish left no setup behind.
+    const unfinished = { ...first.record, environment: "none" };
+    expect(
+      setupCause({
+        plan: plan(base, unfinished),
+        recorded: unfinished,
+        ...flags,
+      }),
+    ).toEqual({ reason: "created" });
+    // The owner's own setup alone: about theirs, not the Environment's.
+    const personal = planWorkspaceSetup({
+      personal: mine,
+      personalAllowed: true,
+      base,
+      recorded: { environment: "none", personal: "none", base },
+    });
+    if (!personal) throw new Error("Nothing to set up");
+    expect(
+      setupCause({
+        plan: personal,
+        recorded: { environment: "none", personal: "none", base },
+        ...flags,
+      }),
+    ).toEqual({ reason: "created" });
+    const personalChanged = planWorkspaceSetup({
+      personal: `${mine} --quiet`,
+      personalAllowed: true,
+      base,
+      recorded: personal.record,
+    });
+    if (!personalChanged) throw new Error("Nothing to set up");
+    expect(
+      setupCause({
+        plan: personalChanged,
+        recorded: personal.record,
+        ...flags,
+      }),
+    ).toEqual({ reason: "changed", previousBase: base });
+
+    expect(
+      setupVariables({
+        plan: moved,
+        cause: { reason: "base-moved", previousBase: base },
+      }),
+    ).toEqual({
+      WORK_BASE: next,
+      WORK_PREVIOUS_BASE: base,
+      WORK_SETUP_REASON: "base-moved",
+    });
+    // A folder that stands on no base, set up for the first time.
+    const script = workspaceSetupScript({
+      plan: {
+        record: {
+          environment: setupFingerprint(env),
+          personal: "none",
+          base: "none",
+        },
+        environment: env,
+      },
+      cause: { reason: "created" },
+    });
+    expect(script).toContain("unset WORK_BASE\n");
+    expect(script).toContain("unset WORK_PREVIOUS_BASE\n");
+    expect(script).toContain("export WORK_SETUP_REASON='created'\n");
+    // After the secrets are loaded, before any part runs.
+    expect(script.indexOf(sandboxSecretsPrelude())).toBeLessThan(
+      script.indexOf("export WORK_SETUP_REASON"),
+    );
+    expect(script.indexOf("export WORK_SETUP_REASON")).toBeLessThan(
+      script.indexOf("work_part '"),
     );
   });
 
@@ -479,9 +601,7 @@ describe("running a workspace's setup", () => {
     let fails = true;
     const workflow = {
       name: "prepareReview",
-      rebuilt: false,
-      moved: false,
-      run: async ({ reason }: { reason: SetupWorkflowReason }) => {
+      run: async ({ reason }: { reason: SetupReason }) => {
         reasons.push(reason);
         await provider.executeCommand(id, "echo workflow >> ../runs", {
           cwd: projectDir,
@@ -555,11 +675,10 @@ describe("running a workspace's setup", () => {
       projectDir,
       personalAllowed: false,
       timeoutMinutes: 1,
+      rebuilt: true,
       workflow: {
         name: "prepareReview",
-        rebuilt: true,
-        moved: false,
-        run: async ({ reason }: { reason: SetupWorkflowReason }) => {
+        run: async ({ reason }: { reason: SetupReason }) => {
           reasons.push(reason);
           return { status: "succeeded" as const };
         },
@@ -568,6 +687,151 @@ describe("running a workspace's setup", () => {
     expect(await runWorkspaceSetup(setup)).toEqual({ status: "succeeded" });
     expect(await runWorkspaceSetup(setup)).toEqual({ status: "current" });
     expect(reasons).toEqual(["rebuilt"]);
+  }, 30_000);
+
+  it("tells each command the commit it runs on, the one it last ran on, and why (ADR 0354)", async () => {
+    const { id } = await provider.createSandbox({});
+    const told = (file: string) =>
+      `echo "$WORK_SETUP_REASON \${WORK_BASE:-unset} \${WORK_PREVIOUS_BASE:-unset}" >> ../${file}`;
+    const first = "a".repeat(40);
+    const second = "b".repeat(40);
+    const setup = {
+      provider,
+      sandboxId: id,
+      projectDir,
+      environment: told("environment"),
+      personal: told("personal"),
+      personalAllowed: true,
+      timeoutMinutes: 1,
+      base: first,
+    };
+    // A variable of the same name left in the sandbox is not believed.
+    await provider.uploadFiles(
+      id,
+      { "secrets.sh": "export WORK_PREVIOUS_BASE=stale\n" },
+      "/workspace/.work-session/env",
+    );
+    expect(await runWorkspaceSetup(setup)).toEqual({ status: "succeeded" });
+    // The base moved: both parts run again, told where they last ran.
+    expect(await runWorkspaceSetup({ ...setup, base: second })).toEqual({
+      status: "succeeded",
+    });
+    // The Environment's command changed on the same base.
+    expect(
+      await runWorkspaceSetup({
+        ...setup,
+        base: second,
+        environment: `${told("environment")} # changed`,
+      }),
+    ).toEqual({ status: "succeeded" });
+    expect(await read(id, "../environment")).toBe(
+      [
+        `created ${first} unset`,
+        `base-moved ${second} ${first}`,
+        `changed ${second} ${second}`,
+        "",
+      ].join("\n"),
+    );
+    // The owner's own part, run after it, hears the same.
+    expect(await read(id, "../personal")).toBe(
+      await read(id, "../environment"),
+    );
+    // Only the owner's own command changed: about theirs.
+    expect(
+      await runWorkspaceSetup({
+        ...setup,
+        base: second,
+        environment: `${told("environment")} # changed`,
+        personal: `${told("personal")} # changed`,
+      }),
+    ).toEqual({ status: "succeeded" });
+    expect((await read(id, "../personal")).trim().split("\n").at(-1)).toBe(
+      `changed ${second} ${second}`,
+    );
+    expect((await read(id, "../environment")).trim().split("\n")).toHaveLength(
+      3,
+    );
+
+    // A workspace made again, and one whose base this preparation moved.
+    const again = await provider.createSandbox({});
+    expect(
+      await runWorkspaceSetup({ ...setup, sandboxId: again.id, rebuilt: true }),
+    ).toEqual({ status: "succeeded" });
+    expect(await read(again.id, "../environment")).toBe(
+      `rebuilt ${first} unset\n`,
+    );
+    const moved = await provider.createSandbox({});
+    expect(
+      await runWorkspaceSetup({
+        ...setup,
+        sandboxId: moved.id,
+        rebuilt: true,
+        moved: true,
+      }),
+    ).toEqual({ status: "succeeded" });
+    expect(await read(moved.id, "../environment")).toBe(
+      `base-moved ${first} unset\n`,
+    );
+  }, 60_000);
+
+  it("times each part as a phase of its own, in order (ADR 0354)", async () => {
+    const { id } = await provider.createSandbox({});
+    const timeline: string[] = [];
+    const phases = {
+      run: async <T>(phase: string, work: () => Promise<T>) => {
+        timeline.push(`start ${phase}`);
+        try {
+          return await work();
+        } finally {
+          timeline.push(`end ${phase}`);
+        }
+      },
+      start: async () => async () => {},
+    };
+    const setup = {
+      provider,
+      sandboxId: id,
+      projectDir,
+      environment: "echo command >> ../runs",
+      personal: "echo personal >> ../runs",
+      personalAllowed: true,
+      timeoutMinutes: 1,
+      phases,
+      workflow: {
+        name: "prepareReview",
+        run: async () => {
+          timeline.push("workflow runs");
+          return { status: "succeeded" as const };
+        },
+      },
+    };
+    expect(await runWorkspaceSetup(setup)).toEqual({ status: "succeeded" });
+    expect(timeline).toEqual([
+      "start setup.environment",
+      "end setup.environment",
+      "start setup.workflow",
+      "workflow runs",
+      "end setup.workflow",
+      "start setup.personal",
+      "end setup.personal",
+    ]);
+    expect(await read(id, "../runs")).toBe("command\npersonal\n");
+    // Nothing to run times nothing.
+    timeline.length = 0;
+    expect(await runWorkspaceSetup(setup)).toEqual({ status: "current" });
+    expect(timeline).toEqual([]);
+    // A part that fails still ends, and the parts after it never start.
+    expect(
+      await runWorkspaceSetup({
+        ...setup,
+        environment: "exit 3",
+        base: "c".repeat(40),
+      }),
+    ).toMatchObject({ status: "failed", exitCode: 3 });
+    expect(timeline).toEqual([
+      "start setup.environment",
+      "end setup.environment",
+    ]);
   }, 30_000);
 
   it("stops a part at its first failing command and does not record it", async () => {
@@ -803,17 +1067,20 @@ describe("a setup on its own network (ADR 0257)", () => {
         provider,
         sandboxId: id,
         projectDir,
-        environment: `echo "environment \${SETUP_TOKEN:-none} \${OTHER_SECRET:-none}" >> ../order`,
+        environment: `echo "environment \${SETUP_TOKEN:-none} \${OTHER_SECRET:-none} $WORK_SETUP_REASON $WORK_BASE \${WORK_PREVIOUS_BASE:-unset}" >> ../order`,
         personal: "echo personal >> ../order",
         personalAllowed: true,
         timeoutMinutes: 1,
+        base: "a".repeat(40),
+        rebuilt: true,
         network,
       }),
     ).toEqual({ status: "succeeded" });
-    // The owner's part is not this call's: it runs once the sandbox is narrow.
+    // The owner's part is not this call's: it runs once the sandbox is
+    // narrow. The command hears what it runs on and why (ADR 0354).
     expect(await order(id)).toEqual([
       "wide",
-      "environment named-secret none",
+      `environment named-secret none rebuilt ${"a".repeat(40)} unset`,
       "narrow",
     ]);
     expect(widenings).toHaveLength(1);

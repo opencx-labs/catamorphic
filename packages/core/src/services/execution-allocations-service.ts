@@ -19,6 +19,7 @@ import {
   CONNECTION_ALIAS_PATTERN,
   type ResolvedConnectionBinding,
 } from "./connection-types.js";
+import { PLACEMENT_WAIT_FRESH_SECONDS } from "./placement-waits.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 import {
@@ -488,10 +489,24 @@ export class ExecutionAllocationsService {
         .returningAll()
         .executeTakeFirstOrThrow();
       // Placed: the workload no longer waits for a machine (ADR 0258).
-      await executor
+      // Since when it waited stays with its Allocation, for the attempt
+      // that runs first (ADR 0354); a wait nobody tried for a while was no
+      // wait any more.
+      const waited = await executor
         .deleteFrom("placement_waits")
         .where("root_workload_id", "=", args.rootWorkloadId)
-        .execute();
+        .returning(
+          sql<Date | null>`CASE WHEN last_tried_at > now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS}) THEN waiting_since END`.as(
+            "since",
+          ),
+        )
+        .executeTakeFirst();
+      if (waited?.since)
+        await executor
+          .updateTable("execution_allocations")
+          .set({ waited_since: waited.since })
+          .where("id", "=", row.id)
+          .execute();
       return mapAllocation(row);
     } catch (cause) {
       if (
