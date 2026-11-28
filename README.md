@@ -71,11 +71,17 @@ titles and messages, showing a matching excerpt beside the pages and work opened
 in the profile. It searches user and assistant messages, excluding tool output
 and reasoning.
 
-Projects are ordinary folders and git repositories. Every agent turn that
-changes files creates a checkpoint commit, and any turn can be undone with
-its files. A session is a durable log of turns that every client folds the
-same way, so a turn whose machine stopped continues elsewhere on the agent's
-own conversation. Local execution uses an embedded
+Projects are ordinary folders, and Work uses Git where a folder is a
+repository; a plain folder you open stays plain until an operation needs
+Git. In a project Work created, and in a chat's own worktree, every agent
+turn that changes files creates a checkpoint commit; in a folder or
+repository you opened, Work commits nothing by itself. Undoing a turn undoes
+every later one too, and the files return in a workspace the chat owns or a
+folder nothing else changed. A session is a durable log of turns that every
+client folds the same way: when the server process that ran a turn stops,
+another picks the turn up where its sandbox survived, and otherwise the turn
+ends as interrupted and the chat continues on the agent's own conversation
+in a new turn. Local execution uses an embedded
 database and local sandboxes, so the desktop does not depend on a hosted
 Catamorphic service.
 
@@ -223,9 +229,11 @@ overwritten. (ADRs [0032](docs/decisions/0032-projects-are-bun-workspaces.md),
 
 ## Git-native work tracking
 
-Work is tracked without anyone performing git. Every agent turn that
-changed files ends in a **checkpoint commit**, its sha stamped on the chat
-message, so every reply's diff is addressable forever. Work never updates
+Work is tracked without anyone performing git. In a project Work created,
+and in a chat's own worktree, every agent turn that changed files ends in a
+**checkpoint commit**, its sha stamped on the chat message, so every reply's
+diff is addressable forever (a folder or repository you opened gets none by
+itself). Work never updates
 the default branch of a repository it did not create, or any branch there
 it did not make: sync fetches and fast-forwards, and local work reaches a
 shared repository as a `work/` branch plus a **pull request**, opened from
