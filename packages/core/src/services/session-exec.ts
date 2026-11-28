@@ -1010,6 +1010,14 @@ export class SessionExecService {
   }): Promise<void> {
     const { action, progress } = args;
     const shared = await this.workspaceOf(action);
+    // Read before the lock is taken: under it, everything is asked through
+    // its transaction, the only one a single-connection database (PGlite)
+    // answers while it is open. A sandbox replaced meanwhile is not this
+    // command's, or is gone: narrowing it then changes nothing.
+    const sandbox = await this.deps.sessions.chatSandbox({
+      projectId: action.project_id,
+      sessionId: action.session_id,
+    });
     await this.withNetworkLock(shared.key, async (trx) => {
       await trx
         .updateTable("session_actions")
@@ -1022,10 +1030,6 @@ export class SessionExecService {
         ...(progress.sandboxId ? { sandboxId: progress.sandboxId } : {}),
       });
       if (others.some((other) => other.widening)) return;
-      const sandbox = await this.deps.sessions.chatSandbox({
-        projectId: action.project_id,
-        sessionId: action.session_id,
-      });
       if (!sandbox || sandbox.sandboxId !== progress.sandboxId) return;
       await narrowSandboxEgress({
         provider: sandbox.provider,
