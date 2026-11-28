@@ -32,8 +32,34 @@ ALTER TABLE project_events
 -- project automations that listen at the revision with the run each
 -- started ([{ enablementId, workflowName, runId }]).
 ALTER TABLE published_revisions
-  DROP COLUMN deploy_workflow,
-  DROP COLUMN deploy_enablement_id,
-  DROP COLUMN deploy_run_id,
   ADD COLUMN deploy_event_id uuid,
   ADD COLUMN deploy_listeners jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+-- A deploy the manifest named keeps the run it started: one under way while
+-- this migration runs is still waited for, and earlier ones still report
+-- theirs.
+UPDATE published_revisions
+SET deploy_listeners = jsonb_build_array(jsonb_build_object(
+  'enablementId', deploy_enablement_id,
+  'workflowName', deploy_workflow,
+  'runId', deploy_run_id))
+WHERE deploy_workflow IS NOT NULL
+  AND deploy_enablement_id IS NOT NULL
+  AND deploy_run_id IS NOT NULL;
+
+-- One that had started no run yet starts over, as its revision's bindings
+-- say: with nothing to wait for it would otherwise go live at once.
+UPDATE published_revisions
+SET status = 'pending',
+    deploy_started_at = NULL,
+    deploy_noticed = false,
+    attempts = 0,
+    retry_at = NULL,
+    updated_at = now()
+WHERE status = 'deploying'
+  AND deploy_listeners = '[]'::jsonb;
+
+ALTER TABLE published_revisions
+  DROP COLUMN deploy_workflow,
+  DROP COLUMN deploy_enablement_id,
+  DROP COLUMN deploy_run_id;
