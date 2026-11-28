@@ -395,6 +395,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
           deliveryKey?: string;
           externalUserId?: string;
           mode?: "async" | "sync" | "none";
+          /** The Project Event the dispatch delivers (ADR 0355). */
+          event?: { id: string; waited: boolean };
         } = {},
       ) =>
         core.runs.triggerProduction(
@@ -413,7 +415,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
           },
           extra.mode === "none"
             ? undefined
-            : { kind: "test.event", mode: extra.mode ?? "async" },
+            : {
+                kind: "test.event",
+                mode: extra.mode ?? "async",
+                ...(extra.event ? { event: extra.event } : {}),
+              },
         );
       const active = await run("first", 1);
       expect(active.status).toBe("pending");
@@ -447,10 +453,34 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const other = await run(true, 33, { externalUserId: "someone-else" });
       expect(waiting).not.toContain(other.id);
       // Only an event no caller waits for joins: not a synchronous fire,
-      // not a run started without the host's dispatch (a caller's, or a
-      // setup run), and not a call.
+      // not a run started without the host's dispatch (a caller's), and
+      // not a call.
       for (const mode of ["sync", "none"] as const)
         expect(waiting).not.toContain((await run(true, 40, { mode })).id);
+      // Nor a delivery of an event its emitter waits for (ADR 0355): that
+      // run is its own, stamped with the event, as every delivered run is.
+      const waitedFor = randomUUID();
+      const own = await run(true, 41, {
+        event: { id: waitedFor, waited: true },
+      });
+      expect(waiting).not.toContain(own.id);
+      const delivered = randomUUID();
+      const joined = await run(true, 42, {
+        event: { id: delivered, waited: false },
+      });
+      expect(joined.id).toBe(waiting[0]);
+      const stamps = await db
+        .selectFrom("workflow_runs")
+        .select(["id", "event_id"])
+        .where("id", "in", [own.id, joined.id])
+        .execute();
+      expect(stamps).toEqual(
+        expect.arrayContaining([
+          { id: own.id, event_id: waitedFor },
+          // The run it joined was started by no event of its own.
+          { id: joined.id, event_id: null },
+        ]),
+      );
       const called = await core.runs.call({
         identity,
         projectId,

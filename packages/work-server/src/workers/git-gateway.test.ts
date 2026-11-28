@@ -1,7 +1,7 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import http from "node:http";
+import type http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +18,7 @@ import {
 import {
   filesHolding,
   filesUnder,
+  gitHttpServer,
   replyOf,
   testServerOptions,
 } from "../test-support.js";
@@ -76,69 +77,6 @@ function freePort(): Promise<number> {
   });
 }
 
-/** A smart-HTTP Git server: `git http-backend` behind Basic auth. */
-function gitHttpServer(projectRoot: string): http.Server {
-  const expected = `Basic ${Buffer.from(`${UPSTREAM_USER}:${UPSTREAM_SECRET}`).toString("base64")}`;
-  return http.createServer((request, response) => {
-    if (request.headers.authorization !== expected) {
-      if (request.headers.authorization)
-        refusedUpstreamRequests.push(request.url ?? "");
-      response.writeHead(401, {
-        "www-authenticate": 'Basic realm="upstream"',
-      });
-      response.end();
-      return;
-    }
-    const url = new URL(request.url ?? "/", "http://upstream");
-    const header = (name: string) => {
-      const value = request.headers[name];
-      return typeof value === "string" ? value : undefined;
-    };
-    const env: Record<string, string> = {
-      PATH: process.env.PATH ?? "",
-      GIT_PROJECT_ROOT: projectRoot,
-      GIT_HTTP_EXPORT_ALL: "1",
-      REMOTE_USER: UPSTREAM_USER,
-      REQUEST_METHOD: request.method ?? "GET",
-      PATH_INFO: decodeURIComponent(url.pathname),
-      QUERY_STRING: url.search.slice(1),
-      CONTENT_TYPE: header("content-type") ?? "",
-    };
-    const encoding = header("content-encoding");
-    if (encoding) env.HTTP_CONTENT_ENCODING = encoding;
-    const protocol = header("git-protocol");
-    if (protocol) env.GIT_PROTOCOL = protocol;
-    const child = spawn("git", ["http-backend"], { env });
-    request.pipe(child.stdin);
-    let head = Buffer.alloc(0);
-    let started = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      if (started) {
-        response.write(chunk);
-        return;
-      }
-      head = Buffer.concat([head, chunk]);
-      const end = head.indexOf("\r\n\r\n");
-      if (end < 0) return;
-      const headers: Record<string, string> = {};
-      let status = 200;
-      for (const line of head.subarray(0, end).toString().split("\r\n")) {
-        const separator = line.indexOf(":");
-        const name = line.slice(0, separator).trim();
-        const value = line.slice(separator + 1).trim();
-        if (name.toLowerCase() === "status")
-          status = Number.parseInt(value, 10);
-        else headers[name] = value;
-      }
-      response.writeHead(status, headers);
-      started = true;
-      const rest = head.subarray(end + 4);
-      if (rest.length > 0) response.write(rest);
-    });
-    child.stdout.on("end", () => response.end());
-  });
-}
-
 async function commit(files: Record<string, string>, message: string) {
   for (const [name, content] of Object.entries(files))
     fs.writeFileSync(path.join(work, name), content);
@@ -179,7 +117,12 @@ beforeAll(async () => {
   await nativeGit(work, ["checkout", "-q", "-b", "feature"]);
   pullHead = await commit({ "app.ts": "export const one = 1;\n" }, "Add app");
   await nativeGit(work, ["push", "-q", repository, "HEAD:refs/pull/42/head"]);
-  upstream = gitHttpServer(projects);
+  upstream = gitHttpServer({
+    projectRoot: projects,
+    user: UPSTREAM_USER,
+    secret: UPSTREAM_SECRET,
+    onRefused: (url) => refusedUpstreamRequests.push(url),
+  });
   await new Promise<void>((resolve) =>
     upstream.listen(0, "127.0.0.1", resolve),
   );
