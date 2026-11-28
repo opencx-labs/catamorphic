@@ -74,8 +74,9 @@ waited and marked with the commit it is delivered at
 (`project_events.at_commit`). The dispatcher leaves such an event alone, since
 it delivers at each enablement's own commit; the deploy step starts each
 listener's run at the revision, stamped with the event, under the automation's
-existing authority, and the revision goes live once all succeeded. `detail` is
-`{ commit, previousCommit }`. A failed or canceled run, the timeout, a
+existing authority, and the revision goes live once all succeeded. Every
+listener is asked before any run starts, so one that is refused leaves no
+other's run begun. `detail` is `{ commit, previousCommit }`. A failed or canceled run, the timeout, a
 suspended listener or one whose authority the revision changes fails the
 revision with the reason, as before. Two things differ from 0331: a workflow
 bound to the event that nobody turned on for the project is not a listener

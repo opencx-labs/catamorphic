@@ -1063,11 +1063,36 @@ describe("a revision's deploy is an event workflows bind (ADRs 0331, 0355)", () 
     expect(await commitOf(watcher)).toBe(sha("ab"));
     expect(await commitOf(seed)).toBe(sha("ab"));
 
-    // The next revision: both succeed, and everything moves.
+    // The next revision, while one listener cannot run: every listener is
+    // asked before any run starts, so the other's run is never begun.
     started = deploys.length;
+    const canceledBefore = canceled.length;
+    await db
+      .updateTable("workflow_enablements")
+      .set({ status: "suspended", suspension_reason: "connection_unavailable" })
+      .where("id", "=", seed)
+      .execute();
+    notifications.length = 0;
     await addCommit(sha("ad"));
     both(sha("ad"));
     await publish(sha("ad"));
+    await revisions.advance();
+    expect(await latest()).toMatchObject({
+      status: "failed",
+      error:
+        "The deploy workflow seedData could not start: Workflow enablement is unavailable: connection_unavailable",
+      deployRuns: [
+        { workflowName: "migrate", runId: null },
+        { workflowName: "seedData", runId: null },
+      ],
+    });
+    expect(deploys).toHaveLength(started);
+    expect(canceled).toHaveLength(canceledBefore);
+
+    // Turned back on, the revision is tried again: both succeed, and
+    // everything moves.
+    await enablements.reenable({ identity: owner, enablementId: seed });
+    expect((await latest())?.status).toBe("pending");
     await revisions.advance();
     expect(deploys.slice(started)).toHaveLength(2);
     for (const deploy of deploys.slice(started)) {

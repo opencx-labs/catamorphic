@@ -236,8 +236,9 @@ run of its own, and the revision goes live only once all of them succeeded.
 Each run executes the workflow as the new revision declares it, under the
 authority its project automation was turned on with. A revision that changes
 what a listening workflow may use or what starts it (adding this trigger to a
-workflow already turned on counts) fails the deploy and says so: consent to the
-update, and Work tries the revision again once by itself. If a run fails, is
+workflow already turned on counts) fails the deploy and says so, before any
+listener's run starts: consent to the update, and Work tries the revision again
+once by itself. If a run fails, is
 canceled or runs past the deploy's time, nothing moves, the previous revision
 stays live, the people who manage project automations are told why, and the
 next published revision runs its own deploy. Someone with \`automations:write\`

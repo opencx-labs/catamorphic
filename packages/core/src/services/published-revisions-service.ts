@@ -481,8 +481,9 @@ export class PublishedRevisionsService {
    * with the event, at the revision's commit under the automation's
    * existing authority. A failure that may clear waits and tries again;
    * refused authority (the revision changes what the workflow may use or
-   * what starts it) or a deterministic failure fails the revision, and
-   * what the other listeners started is canceled.
+   * what starts it) or a deterministic failure fails the revision. Every
+   * listener is asked before any run starts, so one that is refused leaves
+   * no other's run begun; what was started regardless is canceled.
    */
   private async startDeployRuns(row: Row): Promise<void> {
     const event = row.deploy_event_id ? deployEvent(row) : undefined;
@@ -508,6 +509,45 @@ export class PublishedRevisionsService {
       receivedAt: (recorded?.received_at ?? new Date()).toISOString(),
       payload: event.payload,
     };
+    /** A listener could not start: wait where that may clear, else fail. */
+    const stop = async (input: {
+      listener: DeployListener;
+      error: unknown;
+      started: readonly DeployListener[];
+    }): Promise<void> => {
+      if (!isDeployRefusal(input.error)) {
+        await this.deferRow(row);
+        return;
+      }
+      await this.cancelDeployRuns({
+        row,
+        listeners: input.started,
+        reason: "Another deploy workflow of the revision could not start",
+      });
+      await this.fail(
+        row,
+        `The deploy workflow ${input.listener.workflowName} could not start: ${
+          input.error instanceof Error
+            ? input.error.message
+            : String(input.error)
+        }`,
+      );
+    };
+    // Ask every listener first, as starting its run will: a run begun and
+    // then canceled for another's sake could leave half a migration.
+    for (const listener of listeners) {
+      if (listener.runId) continue;
+      try {
+        await this.assertListenerReady({ row, listener });
+      } catch (error) {
+        await stop({
+          listener,
+          error,
+          started: listeners.filter((entry) => entry.runId),
+        });
+        return;
+      }
+    }
     const started: DeployListener[] = [];
     for (const listener of listeners) {
       if (listener.runId) {
@@ -565,21 +605,7 @@ export class PublishedRevisionsService {
           .where("status", "=", "deploying")
           .execute();
       } catch (error) {
-        if (!isDeployRefusal(error)) {
-          await this.deferRow(row);
-          return;
-        }
-        await this.cancelDeployRuns({
-          row,
-          listeners: started,
-          reason: "Another deploy workflow of the revision could not start",
-        });
-        await this.fail(
-          row,
-          `The deploy workflow ${listener.workflowName} could not start: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        await stop({ listener, error, started });
         return;
       }
     }
@@ -589,6 +615,30 @@ export class PublishedRevisionsService {
       .where("id", "=", row.id)
       .where("status", "=", "deploying")
       .execute();
+  }
+
+  /**
+   * Whether a listener's automation may run the revision, by the checks
+   * its run's start makes (ADR 0331): it is on, and the revision leaves
+   * its authority as consented to. Throws what that start would.
+   */
+  private async assertListenerReady(input: {
+    row: Row;
+    listener: DeployListener;
+  }): Promise<void> {
+    await this.deps.enablements.revalidate({
+      identity: {
+        tenantId: input.row.tenant_id,
+        externalUserId: FOLLOW_ACTOR,
+      },
+      enablementId: input.listener.enablementId,
+    });
+    const ready = await this.deps.enablements.previewAtRevision({
+      enablementId: input.listener.enablementId,
+      commitSha: input.row.commit_sha,
+    });
+    if (ready.kind !== "ready")
+      throw new WorkflowRevisionUnavailableError(ready.reason, ready.kind);
   }
 
   /**
