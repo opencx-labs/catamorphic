@@ -9889,7 +9889,7 @@ export class AgentSessionsService {
     // phase (ADR 0354); a sandbox made meanwhile is timed as its own.
     const phases = input.phases ?? UNTIMED;
     const waiting = { end: await phases.start("setup.workflow") };
-    const made: { sandboxId?: string } = {};
+    const made: { sandboxId?: string; underWay?: boolean } = {};
     const cancel = (reason: string) =>
       hooks.events.cancel({
         tenantId: input.identity.tenantId,
@@ -9915,7 +9915,9 @@ export class AgentSessionsService {
           // holding the base alone, set up by the Environment's command.
           await waiting.end();
           const began = Date.now();
+          made.underWay = true;
           const replaced = await input.replace();
+          made.underWay = false;
           made.sandboxId = replaced.sandboxProviderId;
           if (!replaced.settled)
             throw new SetupReplacementError(
@@ -9955,8 +9957,9 @@ export class AgentSessionsService {
       };
     } catch (error) {
       await cancel("Setup failed");
-      // A sandbox that may still be wide fails the preparation (ADR 0257).
-      if (error instanceof SetupNetworkError) throw error;
+      // A sandbox that may still be wide fails the preparation (ADR 0257),
+      // and so does one that could not be made again: the old one is gone.
+      if (error instanceof SetupNetworkError || made.underWay) throw error;
       if (input.signal.aborted) return { status: "aborted" };
       return {
         status: "failed",
