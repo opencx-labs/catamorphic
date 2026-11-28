@@ -41,6 +41,11 @@ async function nativeGit(
  * installed; one that changes the lockfile gets a new sandbox, the
  * Environment's command and the workflow's install; and a workspace given
  * back while idle is set up again.
+ *
+ * Then the rest of a panel reviewer's path: the chat's agent starts
+ * subagents that share its workspace, each submits a typed finding stamped
+ * with the commit the workspace stands on, and a second project workflow
+ * hears each finding as it is recorded and reads the whole panel's.
  */
 const UPSTREAM_USER = "robot";
 const UPSTREAM_SECRET = `upstream-secret-${randomUUID()}`;
@@ -65,6 +70,8 @@ let repository: string;
 let work: string;
 /** One line per run of the Environment's command and of the install. */
 let setupLog: string;
+/** One line per finding the posting workflow heard. */
+let findingsLog: string;
 const workers: Array<Awaited<ReturnType<typeof startWorkWorker>>> = [];
 
 function freePort(): Promise<number> {
@@ -109,12 +116,17 @@ async function waitFor(
  * (as setup does, on the setup's network) only when one changed, and copies
  * the trusted review procedure from the published program last.
  */
-const workflows = (log: string) => `import {
+const workflows = (
+  log: string,
+  findings: string,
+) => `import { appendFile } from "node:fs/promises";
+import {
   type BoundaryContext,
   type Carried,
   defineWorkflow,
   type SessionChangedPaths,
   type SessionExecResult,
+  type SessionState,
   trigger,
 } from "@catamorphic/workflow";
 
@@ -230,11 +242,73 @@ export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
     }),
   ],
 }));
+
+type ResultEvent = {
+  payload: {
+    sessionId: string;
+    session: { parentSessionId: string | null };
+    detail: { name: string; value: { title: string }; commit: string | null };
+  };
+};
+
+/** One finding, as the posting workflow carries it. */
+type Finding = { title: string; commit: string | null; reviewer: string };
+
+/**
+ * @displayname Post finding
+ * @param line - @displayname Line | @description The finding as it is posted
+ */
+async function postFinding({ line }: { line: string }) {
+  "use step";
+  await appendFile(${JSON.stringify(findings)}, line + "\\n");
+}
+
+/** @displayname Post findings */
+export const postFindings = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("session.result-recorded", { names: ["finding"] })],
+  steps: [
+    /** @displayname Read the panel's findings */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<ResultEvent>) => {
+        const finding: Finding = {
+          title: input.payload.detail.value.title,
+          commit: input.payload.detail.commit,
+          reviewer: input.payload.sessionId,
+        };
+        // The review's own chat, and every subagent's results with it.
+        return host["catamorphic.sessions"].read(
+          {
+            sessionId: input.payload.session.parentSessionId ?? input.payload.sessionId,
+            include: ["results"],
+            name: "finding",
+            family: true,
+          },
+          { state: finding },
+        );
+      },
+    }),
+    /** @displayname Post it */
+    defineBoundary({
+      run: async ({
+        input,
+      }: BoundaryContext<Carried<SessionState, Finding>>) => {
+        await postFinding({
+          line: JSON.stringify({
+            ...input.state,
+            panel: input.result.results.map((result) => result.sessionId),
+          }),
+        });
+        return { posted: input.state.title };
+      },
+    }),
+  ],
+}));
 `;
 
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "work-reviewer-"));
   setupLog = path.join(root, "setup.log");
+  findingsLog = path.join(root, "findings.log");
   // The upstream: `main` and a pull request head, like a code host. What
   // an install writes is ignored by Git, as `node_modules` is.
   const projects = path.join(root, "upstream");
@@ -352,6 +426,15 @@ beforeAll(async () => {
           kind: "builtin",
           environment: { allowed: ["review"], preferred: ["review"] },
           connections: ["code"],
+          // What a reviewer hands in while it works (ADR 0323).
+          results: {
+            finding: {
+              type: "object",
+              additionalProperties: false,
+              required: ["title"],
+              properties: { title: { type: "string", minLength: 1 } },
+            },
+          },
         }),
         ".work/skills/review/SKILL.md": "# Review\n\nThe trusted procedure.\n",
         ".work/package.json": JSON.stringify({
@@ -365,25 +448,28 @@ beforeAll(async () => {
           type: "module",
           dependencies: { "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION },
         }),
-        ".work/workflows/src/reviews.ts": workflows(setupLog),
+        ".work/workflows/src/reviews.ts": workflows(setupLog, findingsLog),
       },
     },
   );
   expect(deployed.status, JSON.stringify(deployed)).toBe("deployed");
-  // The setup workflow is the project's own automation: turned on once,
-  // with what it declares, it hears every pull request chat's setup.
-  const request = {
-    identity,
-    projectId,
-    workflowName: "prepareReview",
-    owner: { type: "project" as const },
-    environment: "automation",
-  };
-  const preview = await core.workflowEnablements.preview(request);
-  await core.workflowEnablements.create({
-    ...request,
-    consentDigest: preview.consentDigest,
-  });
+  // The workflows are the project's own automations: turned on once, with
+  // what they declare, they hear every pull request chat's setup and every
+  // finding its reviewers record.
+  for (const workflowName of ["prepareReview", "postFindings"]) {
+    const request = {
+      identity,
+      projectId,
+      workflowName,
+      owner: { type: "project" as const },
+      environment: "automation",
+    };
+    const preview = await core.workflowEnablements.preview(request);
+    await core.workflowEnablements.create({
+      ...request,
+      consentDigest: preview.consentDigest,
+    });
+  }
   // The upstream password lives only in the control plane's vault.
   const connections = core.connections;
   if (!connections) throw new Error("Connections are unavailable");
@@ -808,5 +894,93 @@ describe("a pull request reviewer on Work, end to end", () => {
           .executeTakeFirstOrThrow()
       ).setup_run,
     ).toBeNull();
+  }, 180_000);
+  it("its subagents share the workspace, and each finding they submit is stamped with its commit and reaches the posting workflow as it is recorded", async () => {
+    const reviewSandbox = await sandbox();
+    // A panel: the reviewer starts two subagents, each with one aspect to
+    // check, and each hands in a typed finding.
+    const subagent = (title: string) =>
+      `tool spawn_subsession ${JSON.stringify({
+        title,
+        task: `Check ${title}.\ntool submit_result ${JSON.stringify({ name: "finding", value: { title } })}`,
+      })}`;
+    await sessions().sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      `${subagent("correctness")} ;; ${subagent("security")}`,
+    );
+    const panel = async () =>
+      db()
+        .selectFrom("agent_sessions")
+        .select(["id", "title", "workspace_session_id", "sandbox_id"])
+        .where("parent_session_id", "=", sessionId)
+        .orderBy("created_at")
+        .execute();
+    const posted = () =>
+      fs.existsSync(findingsLog)
+        ? fs
+            .readFileSync(findingsLog, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) =>
+              z
+                .object({
+                  title: z.string(),
+                  commit: z.string().nullable(),
+                  reviewer: z.string(),
+                  panel: z.array(z.string()),
+                })
+                .parse(JSON.parse(line)),
+            )
+        : [];
+    await waitFor(
+      async () => posted().length === 2,
+      "both findings to reach the posting workflow",
+      120_000,
+    );
+    const subagents = await panel();
+    expect(subagents.map((child) => child.title).sort()).toEqual([
+      "correctness",
+      "security",
+    ]);
+    // They work in the reviewer's workspace: its sandbox, not their own.
+    const parent = await db()
+      .selectFrom("agent_sessions")
+      .select("sandbox_id")
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    for (const child of subagents) {
+      expect(child.workspace_session_id).toBe(sessionId);
+      expect(child.sandbox_id).toBe(parent.sandbox_id);
+    }
+    expect(await sandbox()).toBe(reviewSandbox);
+    // Each finding was posted as it was recorded, stamped with the commit
+    // the workspace stood on, by the subagent that submitted it.
+    const findings = posted();
+    expect(findings.map((finding) => finding.title).sort()).toEqual([
+      "correctness",
+      "security",
+    ]);
+    expect(findings.map((finding) => finding.commit)).toEqual([
+      thirdHead,
+      thirdHead,
+    ]);
+    expect(findings.map((finding) => finding.reviewer).sort()).toEqual(
+      subagents.map((child) => child.id).sort(),
+    );
+    // Reading the review's chat with its family finds the whole panel's.
+    expect(
+      findings.some(
+        (finding) =>
+          [...finding.panel].sort().join() ===
+          subagents
+            .map((child) => child.id)
+            .sort()
+            .join(),
+      ),
+    ).toBe(true);
+    // No setup ran for a subagent: the workspace was set up for its chat.
+    expect(await setups()).toHaveLength(4);
   }, 180_000);
 });
