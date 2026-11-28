@@ -650,10 +650,16 @@ export interface SessionHostOperations {
    * checkout or `cwd` beneath it. `in: "session"` runs as the agent's
    * commands do, with the chat's network, grants and secrets, starting its
    * workspace if it has none. `in: "setup"` runs as the Environment's setup
-   * does, on the setup's network without grants or secrets, and only from
-   * the chat's setup workflow while its workspace is built. `$WORK_PROGRAM`
-   * names a read-only copy of this run's `.work/` folder at its deployed
-   * commit: copy trusted files from there. A command longer than the
+   * does, on the setup's network without grants or secrets, and only from a
+   * run the chat's setup event started (a project workflow bound to
+   * `session.workspace-setup`, ADR 0355) while its workspace is set up. In a
+   * sandbox the chat already used (`sandbox: "kept"`) whose setup has a
+   * network of its own, the first such command has Work make a new sandbox,
+   * run the Environment's `setup.command` in it, and run there: what ran in
+   * the kept one before is lost with it, so ask for the network first.
+   * `$WORK_PROGRAM` names a read-only copy of this run's `.work/` folder at
+   * its deployed commit: copy trusted files from there (`cp -f`, since a
+   * copy keeps being read-only). A command longer than the
    * boundary's attempt parks the run until it ends; a retry with the same
    * key answers with the same execution.
    */

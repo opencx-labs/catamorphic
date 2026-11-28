@@ -127,22 +127,9 @@ import {
   type SessionChangedPaths,
   type SessionExecResult,
   type SessionState,
+  type TriggerPayload,
   trigger,
 } from "@catamorphic/workflow";
-
-type SetupEvent = {
-  id: string;
-  payload: {
-    sessionId: string;
-    detail: {
-      reason: "created" | "rebuilt" | "base-moved" | "changed";
-      environment: string;
-      workspace: { ref: string; commit: string };
-      previous: { commit: string } | null;
-      sandbox: "new" | "kept";
-    };
-  };
-};
 
 /** What a setup carries from step to step. */
 type Setup = { event: string; sessionId: string; install: boolean };
@@ -159,14 +146,17 @@ export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
   steps: [
     /** @displayname See what the push changed */
     defineBoundary({
-      run: ({ input, host }: BoundaryContext<SetupEvent>) => {
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<TriggerPayload<"session.workspace-setup">>) => {
         const { previous, workspace, sandbox } = input.payload.detail;
         const setup: Setup = {
           event: input.id,
           sessionId: input.payload.sessionId,
           install: true,
         };
-        // A new sandbox, or one that never set up: nothing to compare.
+        // Not set up here before: nothing to compare.
         if (sandbox === "new" || !previous) return { result: null, state: setup };
         return host["catamorphic.sessions"].changedPaths(
           { sessionId: setup.sessionId, from: previous.commit, to: workspace.commit },

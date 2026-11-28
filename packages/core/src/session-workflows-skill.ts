@@ -44,7 +44,8 @@ not this one), and that archiving the chat cancels it. Say it in plain words.
 Session event kinds: session.created, session.message-received, session.message-sent,
 session.turn-changed, session.state-changed, session.work-changed,
 session.authority-changed, session.result-recorded, session.workspace-changed,
-session.turn-stalled, and session.request-opened. Config may select sessionId, agentId, statuses,
+session.turn-stalled, session.request-opened, and session.workspace-setup (the
+one event a turn waits for, see "Setting a workspace up"). Config may select sessionId, agentId, statuses,
 workStatus, and (for results) names. Omitting sessionId observes authorized
 matching sessions in the project. Example: trigger("session.turn-changed", { sessionId: "actual-id",
 statuses: ["completed", "failed"] }). Never guess an id. Keyed chats carry their
@@ -82,10 +83,12 @@ and session_reopen for new work. Observe session.work-changed with
 context.host["catamorphic.sessions"] provides the session operations every
 surface shares, typed: start, send, wait, read, answer, list, interrupt,
 close, fork, spawn, archive, unarchive, restart, complete, reopen,
-stopWatcher and setMetadata, beside deliver, exec and stop. Each answers
-with the chat's state (state is working, needs_input, idle, failed or
+stopWatcher, setMetadata and changedPaths, beside deliver, exec and stop. Each
+answers with the chat's state (state is working, needs_input, idle, failed or
 closed). read takes include to add the transcript, every result, usage, a
-turn's attempts, or metadata. Every
+turn's attempts, or metadata. changedPaths({ sessionId | key, from, to })
+answers { paths, truncated, complete } instead: the paths that differ between
+two commits of the chat. Every
 host call is a boundary transition: RETURN it. Consume its result as the next
 boundary's input
 (pass { state } as a second argument to keep data across it; the next boundary
@@ -277,20 +280,24 @@ cwd (beneath the checkout), env and timeoutSeconds (default 600, at most 14 400)
 in: "session" runs as the agent's commands do: the chat's network, grants and
 secrets, from its checkout, starting its workspace when it has none. in: "setup"
 runs as the Environment's setup does (on the setup's own network, with only the
-secrets setup.secrets names, no grants) and only from the chat's setup workflow
-while Work sets the workspace up, ending by the setup's own time; anywhere else
-it is refused. When the setup run ends, whatever it started there is stopped. Installing new dependencies
+secrets setup.secrets names, no grants) and only from a run the chat's setup
+event started (below) while Work sets the workspace up, ending by the setup's
+own time; anywhere else it is refused. When the setup ends, whatever it started
+there is stopped. Installing new dependencies
 while a turn runs is not possible: a sandbox in use never gets the setup's
-network. Reuse what setup installed, or move the workspace so setup runs again.
+network. Reuse what setup installed, or move the workspace so setup is due again.
 
 $WORK_PROGRAM names a copy of this run's .work/ folder at its deployed commit,
 outside the checkout, write bits removed: copy trusted files (review skills,
 prompts, scripts) from there, never from the change under review. cp keeps the
-read-only mode, so make copies writable (chmod -R u+w). A command longer than
+read-only mode, so make copies writable (chmod -R u+w), and in a sandbox that
+was kept an earlier setup's copy is read-only too: cp -f, or removing it first,
+replaces it. A command longer than
 the boundary's attempt parks the run until it ends, holding none of its
 capacity; a retry with the same idempotencyKey answers with the same execution.
 A project chat answers project automations holding sessions:write, a member's
-chat only that member's workflows; each execution is written in the chat's log.
+chat only that member's workflows, and a run the chat's setup event started
+reaches that chat; each execution is written in the chat's log.
 Commands see the chat's checkout as the agent left it, and code the chat runs
 can change any file in its sandbox: this keeps a change from rewriting its own
 review procedure in its diff, not a hostile change from tampering at run time.
@@ -302,41 +309,156 @@ beside the agent too, at the same path, where no command reaches it: print it
 from exec and tell the agent to read its procedure there, since copies in the
 checkout are only as trustworthy as the code that runs after them.
 
-An Environment's setup may name a workflow: { "setup": { "command": "pnpm install",
-"workflow": "prepareReview" } }. Work runs it after the command at the points it
-runs setup (every new workspace, when the base moves, when the setup changes),
-and the turn waits for it. Its input is { sessionId, key, agentId, reason:
-"created" | "rebuilt" | "base-moved" | "changed", workspace: { ref, commit } |
-null }. It runs through its project enablement, so enable it for the project
-with the permissions it declares (sessions:write for exec); one not enabled
-fails the setup and the agent is told, as when a step fails or it times out.
-A workspace subsessions share is their parent's: its setup workflow and its
-events name the parent, whichever chat's turn made it.
-
 session.workspace-changed reports detail.change: "ready" (its first workspace),
 "rebuilt" (made again), "moved" (a new base), "released" (given back) or "lost"
 (gone with its machine), with detail.reason and detail.workspace. statuses in
 trigger config selects changes: trigger("session.workspace-changed", { statuses:
 ["moved"] }). Reacting never holds the turn.
 
+### Setting a workspace up
+
+A project workflow sets workspaces up by binding session.workspace-setup in its
+own source: triggers: [trigger("session.workspace-setup", {})], with where to
+narrow it (payload.session.key, payload.detail.environment), enabled as a
+project automation. No configuration names it: setup.workflow was removed from
+.work/project.json, and a manifest that still has it is invalid and says to
+bind the trigger. An Environment's setup takes command, timeoutMinutes, network
+and secrets, and may have no command. Work records the event where setup is due
+(every new workspace, when the base moves, when the command changes), and the
+turn waits for every run the event starts for a project automation, within the
+Environment's setup.timeoutMinutes (30 by default). Several listening workflows
+all run, and the turn goes on when all have ended. A run that fails or is
+canceled, a listener that could not start, or the deadline (runs still going
+are canceled) is a failed setup: the agent is told, the turn goes on, and setup
+is asked again before the next turn. A member's own automation may bind the
+event too: the turn never waits for it, and it may not run commands in:
+"setup". For a member's own chat a project automation hears the event only
+when it declares sessions:write, as for every session event; the project's own
+chats (a reviewer's keyed chats) need nothing extra. A chat that works in a
+folder on a person's computer records no setup event. A workspace subsessions
+share is their parent's: its setup event and its other events name the parent,
+whichever chat's turn made it.
+
+Input is the session event envelope: input.id (the event's id, good for
+idempotency keys), input.payload.sessionId, input.payload.session.key, and
+input.payload.detail { reason: "created" | "rebuilt" | "base-moved" |
+"changed", environment (the Environment's name), workspace: { ref, commit },
+previous: { commit } | null (the base this sandbox last set up on), sandbox:
+"new" | "kept" }. statuses in trigger config selects reasons:
+trigger("session.workspace-setup", { statuses: ["base-moved"] }). A workflow
+decides by the operations it calls during its run, never through what it
+returns.
+
+sandbox: "new" means this sandbox has not set up before (Work made it for this
+turn, or its earlier setup failed; previous is null): Work ran the
+Environment's setup.command first (on its own network when declared), then
+recorded the event. exec with in: "setup" from a run the event started runs
+as setup does: on the setup's network (the sandbox is widened for that
+command), with only the secrets setup.secrets names, no grants.
+
+sandbox: "kept" means the chat already used and set up this sandbox, and setup
+is due because the base moved or the command changed. Work replaced nothing and
+did not run setup.command again. It moved the checkout to the new base in place:
+Git sends what it lacks, and ignored files such as installed packages stay.
+A sandbox is not kept while another session's turn runs in the workspace: it
+is replaced as before. What happens next is the workflow's to say:
+
+- A run calls exec with in: "setup", and the Environment's setup has a network
+  of its own: Work makes a new sandbox at that point (same Allocation, base
+  checked out, setup.command run in it on that network), then runs the command
+  there. Later in: "setup" calls of the same setup use it. The chat's saved
+  work and credentials arrive after, as before. What a run did in the kept
+  sandbox before asking is lost with that sandbox, so network work goes first.
+- No run asks for the setup's network: the sandbox, its checkout and
+  everything setup installed stay, and setup is recorded done for the new base.
+- exec with in: "session" runs in whichever sandbox is current and never asks
+  for a new one. Without a setup network, in: "setup" runs in place in the
+  kept sandbox.
+
+changedPaths({ sessionId | key, from, to }) answers { paths, truncated,
+complete }: the paths that differ between two commits of the chat, read from
+the session's copy on the control plane, so nothing runs in the workspace. At
+most 2000 paths come back (truncated says more differ). complete: false, with
+no paths, means the copy does not hold one of the commits: treat it as
+everything may have changed. It needs what other reads of the chat need. A
+setup workflow compares previous.commit with workspace.commit to see whether a
+lockfile changed.
+
+Keeping a sandbox means a later revision is reviewed where an earlier revision
+already ran code. That is the workflow's choice, and there is no other switch.
+This changed what a push costs. Where a workflow listens, a push no longer
+reruns setup.command by itself in a sandbox that already set up: the workflow
+asks for the setup's network to have it run again. Where nobody listens,
+nothing changed: every push replaces the sandbox of an Environment whose setup
+has a network and reruns the command.
+
+Below, setup.command is the install ("pnpm install --frozen-lockfile") and the
+workflow's command repeats it, so the example is right with or without a setup
+network: with one, Work has run setup.command in the new sandbox and the
+command finds nothing left to do; without one, it installs in place. Where the
+setup has a network, a command that does nothing (true) is enough to ask.
+
 \`\`\`typescript
-import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
-type Setup = { sessionId: string; key: string | null; reason: string };
+import { type BoundaryContext, type Carried, defineWorkflow, type SessionChangedPaths, type SessionExecResult, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/** What a setup carries from step to step. */
+type Setup = { event: string; sessionId: string; install: boolean };
 
 /** @displayname Prepare a review workspace */
 export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
-  permissions: ["sessions:write"],
+  triggers: [
+    trigger("session.workspace-setup", {
+      where: { payload: { session: { key: { $prefix: "pr-" } } } },
+    }),
+  ],
   steps: [
+    /** @displayname See what changed */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<TriggerPayload<"session.workspace-setup">>) => {
+        const { sessionId, detail } = input.payload;
+        const setup: Setup = { event: input.id, sessionId, install: false };
+        // Not set up here before: Work already ran setup.command.
+        if (detail.sandbox === "new" || !detail.previous) return { result: null, state: setup };
+        return host["catamorphic.sessions"].changedPaths(
+          { sessionId, from: detail.previous.commit, to: detail.workspace.commit },
+          // The command itself changed: install whatever the paths say.
+          { state: { ...setup, install: detail.reason === "changed" } },
+        );
+      },
+    }),
+    /** @displayname Install when a lockfile changed */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<Carried<SessionChangedPaths | null, Setup>>) => {
+        const changed = input.result;
+        // Not complete, or too much to list: everything may have changed.
+        const install =
+          input.state.install ||
+          (changed !== null &&
+            (!changed.complete || changed.truncated || changed.paths.some((path) => path.endsWith("pnpm-lock.yaml"))));
+        const setup: Setup = { ...input.state, install };
+        if (!install) return { result: null, state: setup };
+        // On the setup's network, so first: in a kept sandbox Work makes a new
+        // one for it, and what ran before would be lost with the old.
+        return host["catamorphic.sessions"].exec(
+          { sessionId: setup.sessionId, in: "setup", command: "pnpm install --frozen-lockfile", idempotencyKey: "install:" + setup.event },
+          { state: setup },
+        );
+      },
+    }),
     /** @displayname Put the trusted procedure in place */
     defineBoundary({
-      run: ({ input, host }: BoundaryContext<Setup>) =>
-        host["catamorphic.sessions"].exec({
-          sessionId: input.sessionId,
+      run: ({ input, host }: BoundaryContext<Carried<SessionExecResult | null, Setup>>) => {
+        if (input.result && input.result.exitCode !== 0)
+          throw new Error("The install failed: " + input.result.stderr.slice(-500));
+        // In the session, last: it never asks for a new sandbox. cp -f, since an
+        // earlier setup's copy in a kept sandbox is read-only.
+        return host["catamorphic.sessions"].exec({
+          sessionId: input.state.sessionId,
           in: "session",
-          command:
-            'rm -rf .work/skills/review && cp -R "$WORK_PROGRAM/skills/review" .work/skills/review && chmod -R u+w .work/skills/review',
-          idempotencyKey: "trusted:" + input.reason,
-        }),
+          command: 'mkdir -p .work/skills/review && cp -f "$WORK_PROGRAM/skills/review/SKILL.md" .work/skills/review/SKILL.md',
+          idempotencyKey: "trusted:" + input.state.event,
+        });
+      },
     }),
   ],
 }));
@@ -383,7 +505,8 @@ where. The phases, each where it applied: machine.wait (the chat waited for a
 machine), workspace.wait (another chat's turn was making or setting up the
 workspace they share), sandbox.create (its image pulled or built too),
 sandbox.start, workspace.checkout (the base commit), workspace.restore (the
-chat's saved work), setup.environment, setup.workflow, setup.personal,
+chat's saved work), setup.environment, setup.workflow (the time the turn
+waited for its setup event's runs), setup.personal,
 harness.start and harness.first-output (until the agent's first item). Time
 between phases is Work's own preparation. Keep the diagnostics as the evidence,
 not exec output: code the chat runs can forge what a command prints, and

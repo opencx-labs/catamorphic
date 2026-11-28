@@ -9749,7 +9749,7 @@ export class AgentSessionsService {
    * A workspace's setup event (ADR 0355), not recorded yet: the chat's
    * snapshot and, in `detail`, why it is set up, its Environment, the base
    * it stands on, the base this sandbox last set up on, and whether the
-   * sandbox is one this preparation made.
+   * sandbox is kept as it set up before.
    */
   private setupEvent(input: {
     /** The workspace's own session. */
@@ -9759,6 +9759,8 @@ export class AgentSessionsService {
     sandbox: SetupSandbox;
   }): Promise<PendingSessionEvent> {
     const base = parseWorkspaceBase(input.session.workspace);
+    // Every sandbox chat stands on a base by now (ADR 0344).
+    if (!base) throw new Error("A workspace being set up stands on a base");
     return pendingSessionEvent({
       db: this.db,
       sessionId: input.session.id,
@@ -9766,7 +9768,7 @@ export class AgentSessionsService {
       detail: {
         reason: input.cause.reason,
         environment: input.environment,
-        workspace: base ? { ref: base.ref, commit: base.commit } : null,
+        workspace: { ref: base.ref, commit: base.commit },
         previous: input.cause.previousBase
           ? { commit: input.cause.previousBase }
           : null,
@@ -9780,8 +9782,10 @@ export class AgentSessionsService {
    * project automation listens for it (ADR 0355): asked before anything
    * runs or is replaced, of exactly what the event will say. `kept` says
    * the sandbox is one the chat already used and set up, so nothing runs
-   * there by itself. Undefined when the setup is not due here, or nobody
-   * listens.
+   * there by itself; one that never set up (made for this turn, or whose
+   * earlier setup failed) is `new` to its setup, and the Environment's
+   * command runs first. Undefined when the setup is not due here, the chat
+   * stands on no base, or nobody listens.
    */
   private async setupHookOf(input: {
     session: SessionRow;
@@ -9815,8 +9819,10 @@ export class AgentSessionsService {
       rebuilt: setUpFor.workspace_generation > 1,
       moved: input.moved,
     });
-    if (!cause) return undefined;
-    const sandbox: SetupSandbox = input.fresh ? "new" : "kept";
+    if (!cause || !parseWorkspaceBase(setUpFor.workspace)) return undefined;
+    // Set up here before: what happens next is the workflow's to say.
+    const kept = !input.fresh && cause.previousBase !== undefined;
+    const sandbox: SetupSandbox = kept ? "kept" : "new";
     const listeners = await hooks.events.listeners({
       event: await this.setupEvent({
         session: setUpFor,
@@ -9826,11 +9832,7 @@ export class AgentSessionsService {
       }),
     });
     if (listeners.length === 0) return undefined;
-    return {
-      sandbox,
-      // Set up here before: what happens next is the workflow's to say.
-      kept: !input.fresh && cause.previousBase !== undefined,
-    };
+    return { sandbox, kept };
   }
 
   /**

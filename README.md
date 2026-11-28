@@ -327,6 +327,12 @@ a session event too, `session.request-opened`, which a workflow answers with
 chat no one watches waits for that answer instead of being refused at once
 (ADR
 [0352](docs/decisions/0352-an-opened-request-is-a-session-event-automations-answer-unattended-approvals.md)).
+Setting a workspace up is a session event as well, `session.workspace-setup`:
+a project workflow binds it in its own source, the turn waits for its runs,
+and a sandbox that already set up is kept when its base moves until a run
+asks for the setup's network, so a pull request reviewer installs again only
+when a lockfile changed (`sessions.changedPaths` says which paths did) (ADR
+[0355](docs/decisions/0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md)).
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.

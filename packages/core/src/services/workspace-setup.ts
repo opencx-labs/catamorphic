@@ -81,8 +81,10 @@ export type SetupPart = "environment" | "hook" | "personal";
 export type SetupReason = "created" | "rebuilt" | "base-moved" | "changed";
 
 /**
- * The sandbox a setup's event is about (ADR 0355): one this preparation
- * made (`new`), or one the chat already used (`kept`).
+ * The sandbox a setup's event is about (ADR 0355): `kept`, one the chat
+ * already used and set up, where Work replaces and runs nothing by itself;
+ * or `new` to its setup, made for this turn or never set up, where the
+ * Environment's command runs first.
  */
 export type SetupSandbox = "new" | "kept";
 

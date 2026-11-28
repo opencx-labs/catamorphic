@@ -583,13 +583,24 @@ provide it take the work:
   workspace stands on, \`WORK_PREVIOUS_BASE\` the commit this sandbox's last
   setup ran on (unset when it has not set up yet), and
   \`WORK_SETUP_REASON\` is \`created\` (a new workspace), \`rebuilt\` (made
-  again), \`base-moved\` or \`changed\` (the setup changed), the reason a
-  setup workflow is given. An install can skip what did not change:
+  again), \`base-moved\` or \`changed\` (the setup changed), the reason
+  the setup event carries. An install can skip what did not change:
   \`[ -n "\${WORK_PREVIOUS_BASE:-}" ] && git diff --quiet
   "$WORK_PREVIOUS_BASE" "$WORK_BASE" -- pnpm-lock.yaml || pnpm install
   --frozen-lockfile\`. A member may add their own \`setup\` in their
   \`.work/personal/environment.json\`, run after this one in their own
   chats with the same variables.
+  A project workflow takes part by binding
+  \`trigger("session.workspace-setup", {})\` in its own source and being
+  turned on for the project: the turn waits for its runs, within
+  \`timeoutMinutes\`. \`setup\` names no workflow (\`setup.workflow\` was
+  removed, and a manifest that still has it is invalid) and may have no
+  command. Where such a workflow listens, a moved base no longer reruns the
+  command by itself in a sandbox that already set up: the sandbox is kept,
+  and the workflow asks for the setup's network (\`exec\` with \`in:
+  "setup"\`) to get a new sandbox and the command. Where none listens,
+  nothing changed. Read "Setting a workspace up" in the session-workflows
+  skill before writing one.
   With a \`gateway\` or \`allowlist\` network, \`"network": { "allow":
   ["registry.npmjs.org"] }\` lets the setup reach those hosts alone while it
   runs, in a workspace at a ref of the project's remote: a new sandbox

@@ -1,3 +1,4 @@
+import type { Json } from "@catamorphic/db";
 import { describe, expect, it } from "vitest";
 import { schedule } from "../schedule-trigger-kind.js";
 import { SESSION_TRIGGER_KINDS } from "../session-trigger-kinds.js";
@@ -192,5 +193,88 @@ describe("session workflow trigger contracts", () => {
     expect(kind?.matches?.({ config: { names: ["vote"] }, payload })).toBe(
       false,
     );
+  });
+
+  it("types a workspace setup's detail, and selects by chat, agent and reason (ADR 0355)", () => {
+    const kind = SESSION_TRIGGER_KINDS.find(
+      (entry) => entry.name === "session.workspace-setup",
+    );
+    const event = (detail: Json) => ({
+      id: "event",
+      sequence: 3,
+      projectId: "p",
+      source: "session",
+      kind: "session.workspace-setup",
+      externalId: "event",
+      occurredAt: "now",
+      receivedAt: "now",
+      payload: {
+        sessionId: "s",
+        agentId: "a",
+        externalUserId: "catamorphic:project",
+        actor: { kind: "system", code: "session.workspace-setup" },
+        causation: [],
+        detail,
+        session: {
+          id: "s",
+          key: "pr-acme/web-1",
+          title: null,
+          status: "active",
+          workStatus: "open",
+          activity: null,
+          parentSessionId: null,
+          stateRevision: 1,
+          authorityHostId: "h",
+          authorityRevision: 1,
+        },
+      },
+    });
+    const kept = event({
+      reason: "base-moved",
+      environment: "review",
+      workspace: { ref: "refs/pull/1/head", commit: "b".repeat(40) },
+      previous: { commit: "a".repeat(40) },
+      sandbox: "kept",
+    });
+    const made = event({
+      reason: "created",
+      environment: "review",
+      workspace: { ref: "refs/pull/1/head", commit: "a".repeat(40) },
+      previous: null,
+      sandbox: "new",
+    });
+    expect(kind?.modes).toEqual(["async"]);
+    for (const payload of [kept, made])
+      expect(kind?.validatePayload(payload)).toEqual({ ok: true });
+    // What a workflow reads is what the kind promises: nothing is left out.
+    expect(kind?.validatePayload(event({ reason: "created" })).ok).toBe(false);
+    expect(
+      kind?.validatePayload(
+        event({
+          reason: "created",
+          environment: "review",
+          workspace: null,
+          previous: null,
+          sandbox: "new",
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(kind?.matches?.({ config: {}, payload: kept })).toBe(true);
+    expect(
+      kind?.matches?.({
+        config: { sessionId: "s", agentId: "a" },
+        payload: kept,
+      }),
+    ).toBe(true);
+    expect(
+      kind?.matches?.({ config: { agentId: "other" }, payload: kept }),
+    ).toBe(false);
+    // `statuses` selects reasons.
+    expect(
+      kind?.matches?.({ config: { statuses: ["base-moved"] }, payload: kept }),
+    ).toBe(true);
+    expect(
+      kind?.matches?.({ config: { statuses: ["base-moved"] }, payload: made }),
+    ).toBe(false);
   });
 });
