@@ -310,6 +310,12 @@ describe("project Environment policy", () => {
     ["an invalid volume name", { volumes: { Cache: "~/.cache" } }, "volumes"],
     ["setup as a bare command", { setup: "pnpm install" }, "setup"],
     [
+      "a setup that names a workflow, saying what to write instead",
+      { setup: { command: "pnpm install", workflow: "prepareReview" } },
+      'setup.workflow: setup.workflow was removed: a workflow is not named in configuration. Bind it to the trigger in its own source instead, trigger("session.workspace-setup", {}), and enable it for the project',
+    ],
+    ["a setup that names nothing", { setup: {} }, "setup"],
+    [
       "the setup timeout beside setup",
       { setup: { command: "pnpm install" }, setupTimeoutMinutes: 45 },
       "setupTimeoutMinutes",
@@ -370,6 +376,31 @@ describe("project Environment policy", () => {
       environments: { dev: { workloads: ["agent"], ...extra } },
     });
     expect(parsed.entries[0]?.invalid?.error).toContain(message);
+  });
+
+  it("parses a setup with no command: a network and a time for the workflows bound to its event (ADR 0355)", () => {
+    const parsed = parseProjectEnvironmentPolicy({
+      environments: {
+        review: {
+          workloads: ["agent"],
+          network: { egress: "gateway" },
+          setup: {
+            timeoutMinutes: 20,
+            network: { allow: ["registry.npmjs.org"] },
+          },
+        },
+        dev: { workloads: ["agent"], setup: { timeoutMinutes: 10 } },
+      },
+    });
+    expect(parsed.entries.map((entry) => entry.invalid)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(parsed.environments.review?.setup).toEqual({
+      timeoutMinutes: 20,
+      network: { allow: ["registry.npmjs.org"] },
+    });
+    expect(parsed.environments.dev?.setup).toEqual({ timeoutMinutes: 10 });
   });
 
   it("parses commands that run apart from the agent and what they reach (ADR 0332)", () => {

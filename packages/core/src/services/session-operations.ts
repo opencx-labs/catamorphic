@@ -5,6 +5,7 @@ import {
   SessionMetadataError,
 } from "@catamorphic/agent-protocol";
 import { type DB, type Json, jsonbText } from "@catamorphic/db";
+import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
@@ -41,6 +42,11 @@ import {
   sessionStateOutputSchema,
 } from "./session-state.js";
 import { SessionWorkspaceRequestSchema } from "./session-workspaces.js";
+import {
+  CHANGED_PATHS_LIMIT,
+  COMMIT_ID_PATTERN,
+  changedPaths,
+} from "./sessions/changed-paths.js";
 import { SessionCommandRejectedError } from "./sessions/session-log.js";
 import { SessionInputNotFoundError } from "./sessions/session-results.js";
 import { SUBSESSION_WORKSPACES } from "./sessions/subsession-tools.js";
@@ -237,6 +243,13 @@ function chat<Shape extends typeof target>(shape: Shape) {
 }
 
 const effort = z.enum(["low", "medium", "high", "xhigh", "max"]);
+/** A commit by its full id: never a ref, which moves between two reads. */
+const commitId = z
+  .string()
+  .regex(
+    COMMIT_ID_PATTERN,
+    "A full commit id: 40 or 64 lowercase hex characters",
+  );
 const READ_SECTIONS = [
   "transcript",
   "results",
@@ -469,6 +482,47 @@ export const SESSION_OPERATIONS = {
       },
       metadata: { type: "object", description: "With include metadata" },
     }),
+    annotations: READ_ONLY,
+    scope: "work:read",
+  }),
+  /**
+   * The paths that differ between two commits of the chat, read from the
+   * copy of its repository this host keeps: nothing runs in its workspace.
+   * A read, so it is not recorded and takes no idempotency key.
+   */
+  session_changed_paths: define("session_changed_paths", {
+    title: "List the files that differ between two commits of a chat",
+    description: `Use this to learn which files differ between two commits of a chat's workspace, without running anything in it: whether a lockfile moved between the base a workspace stood on and the one it stands on now. from and to are full commit ids. It returns paths (repository paths, at most ${CHANGED_PATHS_LIMIT}), truncated (true when more differ than paths names) and complete. complete false means the server's copy of the chat's repository does not hold one of the two commits, so nothing was compared and paths is empty: treat it as everything may have changed.`,
+    input: chat({
+      ...target,
+      from: commitId.describe("The commit to compare from, by its full id"),
+      to: commitId.describe("The commit to compare to, by its full id"),
+    }),
+    output: z.object({
+      paths: z.array(z.string()),
+      truncated: z.boolean(),
+      complete: z.boolean(),
+    }),
+    outputSchema: {
+      type: "object",
+      properties: {
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description: `The paths that differ, in Git's order, at most ${CHANGED_PATHS_LIMIT}`,
+        },
+        truncated: {
+          type: "boolean",
+          description: "More paths differ than paths names",
+        },
+        complete: {
+          type: "boolean",
+          description:
+            "false: one of the commits is not in the chat's repository here, nothing was compared and everything may have changed",
+        },
+      },
+      required: ["paths", "truncated", "complete"],
+    },
     annotations: READ_ONLY,
     scope: "work:read",
   }),
@@ -751,6 +805,11 @@ export class SessionOperationsService {
         projectId: string;
         audience: ChatAudience | undefined;
       }) => Promise<Identity>;
+      /**
+       * Opens the copy of a chat's repository this host keeps, for
+       * `session_changed_paths`. A host that connects none refuses it.
+       */
+      projectManager?: Pick<ProjectManager, "openSession">;
     },
   ) {}
 
@@ -1202,6 +1261,12 @@ export class SessionOperationsService {
           chatRef,
           SESSION_OPERATIONS.session_read.input.parse(parsed),
         );
+      case "session_changed_paths":
+        return this.changedPaths(
+          input,
+          chatRef,
+          SESSION_OPERATIONS.session_changed_paths.input.parse(parsed),
+        );
       case "session_send": {
         const args = SESSION_OPERATIONS.session_send.input.parse(parsed);
         const receipt = await this.sessions.deliver(
@@ -1354,6 +1419,60 @@ export class SessionOperationsService {
       );
     }
     return json({ ...state, ...sections });
+  }
+
+  /**
+   * The paths that differ between two commits of a chat, for whoever may
+   * read it. Read on this host from the copy of the chat's repository, the
+   * one its sandbox is seeded from; a shared subsession's is the copy of
+   * the session whose workspace it works in (ADR 0322).
+   */
+  private async changedPaths(
+    input: SessionOperationCall,
+    chatRef: { projectId: string; sessionId: string },
+    args: z.infer<typeof SESSION_OPERATIONS.session_changed_paths.input>,
+  ): Promise<Json> {
+    const { projectId, sessionId } = chatRef;
+    await this.sessions.assertSession(
+      input.identity,
+      projectId,
+      sessionId,
+      "read",
+    );
+    // A commit differs from itself in nothing: no copy to open.
+    if (args.from === args.to)
+      return json({ paths: [], truncated: false, complete: true });
+    const projectManager = this.deps.projectManager;
+    if (!projectManager)
+      throw new SessionOperationError(
+        "internal",
+        "This server keeps no copy of the chat's repository to compare.",
+        { sessionId },
+      );
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .select(["id", "workspace_session_id"])
+      .where("id", "=", sessionId)
+      .where("project_id", "=", projectId)
+      .executeTakeFirst();
+    if (!session) throw new AgentSessionNotFoundError(sessionId);
+    input.signal?.throwIfAborted();
+    const copy = await projectManager.openSession({
+      tenantId: input.identity.tenantId,
+      projectId,
+      sessionId: session.workspace_session_id ?? session.id,
+    });
+    try {
+      return json(
+        await changedPaths({
+          repoPath: copy.repoPath,
+          from: args.from,
+          to: args.to,
+        }),
+      );
+    } finally {
+      await copy.dispose();
+    }
   }
 
   /** What a recorded operation answers: its result, with the chat's state where one is promised. */

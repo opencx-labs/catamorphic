@@ -820,6 +820,7 @@ export interface ProjectEventMonitors {
 }
 
 export interface ProjectEvents {
+  at_commit: string | null;
   external_id: string;
   id: Generated<string>;
   kind: string;
@@ -829,6 +830,7 @@ export interface ProjectEvents {
   received_at: Generated<Timestamp>;
   sequence: Generated<Int8>;
   source: string;
+  waited: Generated<boolean>;
 }
 
 export interface ProjectPlugins {
@@ -892,11 +894,10 @@ export interface PublishedRevisions {
   commit_sha: string;
   created_at: Generated<Timestamp>;
   deploy_attempt: Generated<number>;
-  deploy_enablement_id: string | null;
+  deploy_event_id: string | null;
+  deploy_listeners: Generated<Json>;
   deploy_noticed: Generated<boolean>;
-  deploy_run_id: string | null;
   deploy_started_at: Timestamp | null;
-  deploy_workflow: string | null;
   error: string | null;
   id: Generated<string>;
   previous_commit_sha: string | null;
@@ -1426,6 +1427,7 @@ export interface WorkflowRuns {
   enrollment: Json | null;
   environment_name: string | null;
   error: string | null;
+  event_id: string | null;
   external_user_id: string | null;
   id: Generated<string>;
   input: Json | null;
@@ -1441,8 +1443,6 @@ export interface WorkflowRuns {
   queued_at: Timestamp | null;
   result: Json | null;
   session_artifact_id: string | null;
-  setup_build: string | null;
-  setup_session_id: string | null;
   started_at: Timestamp | null;
   state_version: Generated<Int8>;
   status: Generated<string>;

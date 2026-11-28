@@ -111,7 +111,11 @@ host such as `binaries.prisma.sh`, another image registry). A setup that
 fails runs again before every turn, each time in a new sandbox, so a host
 missing from the list costs every turn. With a setup network the
 Environment keeps no volumes: what the pull request's install scripts write
-must never reach the next review.
+must never reach the next review. A new sandbox and a full install on each
+push is what the pack ships, because no workflow of its own listens for the
+setup event. A project workflow bound to `session.workspace-setup` decides
+what a push costs instead, and may keep the sandbox when no lockfile
+changed ("Optional: a trusted procedure, and pushes during a review").
 
 `caches.pnpm` is a pnpm store every review sandbox mounts read only, setup's
 included, at `~/.cache/work/pnpm-store` (ADR 0334). Only a fill writes it:
@@ -414,26 +418,170 @@ restarting.
 Two patterns the pack leaves out, for a team whose reviewer reads its own
 procedure files (skills, prompts, scripts) from the repository, or whose
 reviews are long enough that pushes land while one runs. Both use `exec`
-and setup workflows (`session-workflows`, ADR 0324).
+and a workflow bound to the setup event (`session-workflows`, ADR 0355).
 
-**The review procedure comes from the program, not the pull request.** Name
-a setup workflow beside the command, `"setup": { "command": "...",
-"workflow": "prepareReview" }`, and enable it for the project with
-`permissions: ["sessions:write"]`. Work runs it in every new review
-workspace, after each move to a new head and when the setup changes, and the
-turn waits for it. It returns one `exec` with `in: "session"`, from the
-checkout:
+**The review procedure comes from the program, not the pull request.** A
+project workflow sets review workspaces up by binding
+`session.workspace-setup` in its own source. The Environment's `setup`
+names no workflow: `setup.workflow` was removed, and a manifest that still
+has it is invalid. Enable the workflow for the project. It declares no
+permissions, since the review chats are the project's own. Work records the
+event in every new review workspace, after each move to a new head and when
+the setup changes, and the turn waits for every run the event starts for a
+project automation, within `setup.timeoutMinutes`. A run decides by the
+operations it calls, never by what it returns:
 
-```sh
-rm -rf .work/skills/review .work/agents/reviewer.md
-cp -R "$WORK_PROGRAM/skills/review" .work/skills/review
-cp "$WORK_PROGRAM/agents/reviewer.md" .work/agents/reviewer.md
-chmod -R u+w .work/skills/review .work/agents/reviewer.md
+```typescript
+import {
+  type BoundaryContext,
+  type Carried,
+  defineWorkflow,
+  type SessionChangedPaths,
+  type SessionExecResult,
+  type TriggerPayload,
+  trigger,
+} from "@catamorphic/workflow";
+
+/** What a setup carries from step to step. */
+type Setup = { event: string; sessionId: string; install: boolean };
+
+const LOCKFILES = ["pnpm-lock.yaml", "package-lock.json", "bun.lock"];
+
+/** @displayname Prepare review */
+export const prepareReview = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [
+    trigger("session.workspace-setup", {
+      where: { payload: { session: { key: { $prefix: "pr-" } } } },
+    }),
+  ],
+  steps: [
+    /** @displayname See what the push changed */
+    defineBoundary({
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<TriggerPayload<"session.workspace-setup">>) => {
+        const { sessionId, detail } = input.payload;
+        const setup: Setup = { event: input.id, sessionId, install: false };
+        // Not set up here before: Work already ran setup.command (the
+        // install) in it. Nothing to compare.
+        if (detail.sandbox === "new" || !detail.previous)
+          return { result: null, state: setup };
+        return host["catamorphic.sessions"].changedPaths(
+          {
+            sessionId,
+            from: detail.previous.commit,
+            to: detail.workspace.commit,
+          },
+          // The command itself changed: run it again whatever the paths say.
+          { state: { ...setup, install: detail.reason === "changed" } },
+        );
+      },
+    }),
+    /** @displayname Install when a lockfile changed */
+    defineBoundary({
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<Carried<SessionChangedPaths | null, Setup>>) => {
+        const changed = input.result;
+        // Not complete, or too much to list: everything may have changed.
+        const install =
+          input.state.install ||
+          (changed !== null &&
+            (!changed.complete ||
+              changed.truncated ||
+              changed.paths.some((path) =>
+                LOCKFILES.includes(path.split("/").at(-1) ?? ""),
+              )));
+        const setup: Setup = { ...input.state, install };
+        if (!install) return { result: null, state: setup };
+        // Ask for the setup's network, and first: Work makes a new sandbox
+        // for it, checks the head out and runs setup.command there. What
+        // ran in the kept one before would be lost with it. Asking is this
+        // command's whole job; put here what else needs the registries.
+        return host["catamorphic.sessions"].exec(
+          {
+            sessionId: setup.sessionId,
+            in: "setup",
+            command: "true",
+            idempotencyKey: "install:" + setup.event,
+          },
+          { state: setup },
+        );
+      },
+    }),
+    /** @displayname Copy the trusted procedure */
+    defineBoundary({
+      run: ({
+        input,
+        host,
+      }: BoundaryContext<Carried<SessionExecResult | null, Setup>>) => {
+        if (input.result && input.result.exitCode !== 0)
+          throw new Error("The install failed: " + input.result.stderr.slice(-500));
+        // In the session: it needs no network, so it never asks for a new
+        // sandbox. From the program this run executes, never the change.
+        return host["catamorphic.sessions"].exec(
+          {
+            sessionId: input.state.sessionId,
+            in: "session",
+            command:
+              'mkdir -p .work/skills/review && cp -f "$WORK_PROGRAM/skills/review/SKILL.md" .work/skills/review/SKILL.md',
+            idempotencyKey: "procedure:" + input.state.event,
+          },
+          { state: input.state },
+        );
+      },
+    }),
+    /** @displayname Report */
+    defineBoundary({
+      run: async ({
+        input,
+      }: BoundaryContext<Carried<SessionExecResult, Setup>>) => {
+        if (input.result.exitCode !== 0)
+          throw new Error("The procedure was not copied: " + input.result.stderr.slice(-500));
+        return { installed: input.state.install };
+      },
+    }),
+  ],
+}));
 ```
+
+`detail.sandbox` says what Work did before the event. `"new"`: this
+preparation made the sandbox and ran `setup.command` in it, on the setup's
+network. `"kept"`: the chat already set this sandbox up, so Work replaced
+nothing and ran nothing. It moved the checkout to the new head in place:
+Git sends what it lacks, and ignored files such as `node_modules` stay. A
+sandbox is not kept while another session's turn runs in the workspace (a
+subagent still at work): it is replaced as before.
+
+What a push costs, each way. A push that changes no lockfile costs a fetch
+and this run: the sandbox, its checkout and what setup installed stay, and
+setup is recorded done for the new head. A push that changes one costs
+what every push costs without the workflow: the first `exec` with
+`in: "setup"` has Work make a new sandbox in the same Allocation, check the
+head out and run `setup.command` there on the setup's network, then the
+command; the chat's saved work and credentials arrive after. `exec` with
+`in: "session"` runs in whichever sandbox is current and never asks for a
+new one. Keeping a sandbox means a later revision is reviewed where an
+earlier revision already ran code. That is this workflow's choice and there
+is no other switch: to review every revision in a new sandbox, ask for the
+setup's network on every push, or enable no such workflow.
+
+This changes what a push does. While a workflow listens, a push no longer
+reruns `setup.command` by itself in a sandbox that already set up: the
+workflow asks for the setup's network to have it run again. With no
+workflow listening nothing changed, and every push replaces the sandbox and
+runs the command. A run that fails or is canceled, a workflow that could
+not start, or the deadline (runs still going are canceled) is a failed
+setup: the agent is told, the turn goes on, and setup is asked again before
+the next turn.
 
 `$WORK_PROGRAM` is the run's `.work/` folder at its deployed commit, so the
 pull request cannot change how it is reviewed by editing these files in its
-diff. A second `exec` can write prepared facts the agent reads (the
+diff. It is read-only and `cp` keeps that, so in a kept sandbox the earlier
+copy is read-only too: `cp -f` (or removing it first) replaces it. A further
+`exec` can write prepared facts the agent reads (the
 description, the discussion, CI results fetched by an earlier step) into
 files beside them.
 
@@ -474,8 +622,11 @@ git fetch -q origin "$SHA" && git diff --quiet HEAD "$SHA" -- pnpm-lock.yaml '**
   a turn runs: a sandbox in use never gets the setup's network (ADR 0257).
   Deliver `workspace: { ref: "refs/pull/<number>/head", update: "reset" }`
   with `mode: "steer"` and content telling the agent the workspace moves to
-  the new head after its current turn, so it wraps up. The move runs setup
-  again on the new base before the next turn.
+  the new head after its current turn, so it wraps up. Setup is due again on
+  the new base before the next turn: with no workflow listening, Work makes
+  a new sandbox and runs `setup.command`; with one, it records the setup
+  event for the kept sandbox, and the workflow above sees the lockfile
+  changed and asks for the setup's network.
 
 What this protects, honestly: with `commands` apart, code the pull request
 runs reaches only the command container, so the reviewer's own program copy,

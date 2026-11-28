@@ -410,23 +410,34 @@ import {
 } from "./sessions/turn-stalls.js";
 import { UserNotificationsService } from "./user-notifications-service.js";
 import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
+import type {
+  WaitedEventOutcome,
+  WaitedEventsService,
+} from "./waited-events.js";
 import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 import type { WorkspaceCheckoutsService } from "./workspace-checkouts.js";
 import {
+  type PendingSessionEvent,
+  pendingSessionEvent,
   recordWorkspaceChange,
   recordWorkspaceGone,
   recordWorkspaceMade,
+  WORKSPACE_SETUP_EVENT,
 } from "./workspace-events.js";
 import {
+  environmentSetupCause,
   environmentSetupDue,
   narrowSandboxEgress,
   readSetupRecord,
   runWorkspaceSetup,
+  type SetupCause,
+  type SetupHook,
+  type SetupHookOutcome,
   SetupNetworkError,
   type SetupNetworkRefusal,
-  type SetupReason,
-  type SetupWorkflowOutcome,
+  type SetupRecord,
+  type SetupSandbox,
   sessionDirectory,
   setupClaimWaitMs,
   type WorkspaceSetupOutcome,
@@ -438,93 +449,157 @@ import {
 export type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
 
 /**
- * Runs an Environment's setup workflow for one chat (ADR 0324) through
- * the workflow's project enablement, and waits for its end.
+ * What a chat's setup event needs of the host (ADR 0355): who listens for
+ * it, the wait for the runs it starts, and the end of what they started.
  */
-export interface SetupWorkflowRunner {
-  run(input: {
-    tenantId: string;
-    projectId: string;
-    workflowName: string;
-    /**
-     * The chat and workspace build the run sets up, stamped on the run by
-     * Work alone: what lets its commands run in setup.
-     */
-    setupFor: SetupRunFact;
-    input: Json;
-    timeoutMs: number;
-    signal: AbortSignal;
-  }): Promise<SetupWorkflowOutcome>;
+export interface SetupHooks {
+  events: Pick<
+    WaitedEventsService,
+    "bound" | "listeners" | "record" | "settle" | "cancel"
+  >;
   /**
-   * After the run ended however it ended (ADR 0324): stop every command it
-   * started in the chat's sandbox, and narrow a sandbox it widened, failing
-   * closed. Preparation goes on only once this returned.
+   * After the event's runs ended however they ended: stop every command
+   * they started in the chat's sandbox, and narrow a sandbox they widened,
+   * failing closed. Preparation goes on only once this returned.
    */
   end(input: {
     tenantId: string;
     projectId: string;
     sessionId: string;
-    build: string;
+    event: string;
     network: boolean;
   }): Promise<void>;
 }
 
 /**
- * What a setup run is for (ADR 0324), as `workflow_runs.setup_session_id`
- * and `setup_build` record it: only Work's setup path writes them.
+ * The setup event a run was started by (ADR 0355): `workflow_runs.event_id`
+ * of a run of one of the project's own automations. Only the event
+ * dispatcher writes that stamp.
  */
 export interface SetupRunFact {
-  sessionId: string;
-  build: string;
+  event: string;
 }
 
 /**
- * Whether a run is the chat's setup for the workspace build in progress:
- * its stamp names this chat and the build the chat is setting up now. A
- * run for an earlier build, or any other run, is not.
+ * Whether a run is one the chat's setup event started, while that setup
+ * is under way: its stamp names the event the chat is setting up with now.
+ * A run of an earlier setup's event, or any other run, is not.
  */
 export function isCurrentSetupRun(input: {
-  sessionId: string;
   setupRun: SetupRunRecord | null;
   run: SetupRunFact | null;
 }): boolean {
   return (
     input.setupRun !== null &&
     input.run !== null &&
-    input.run.sessionId === input.sessionId &&
-    input.run.build === input.setupRun.build
+    input.run.event === input.setupRun.event
   );
 }
 
-/** A chat's setup run while it runs, as `agent_sessions.setup_run` holds it. */
+/**
+ * A chat's setup while the runs of its event run (ADR 0355), as
+ * `agent_sessions.setup_run` holds it.
+ */
 export interface SetupRunRecord {
-  /** The workspace build being set up; its setup run carries the same. */
-  build: string;
-  /** Its commands `in: "setup"` run on the setup's own network (ADR 0257). */
+  /** The setup event; the runs it started carry the same. */
+  event: string;
+  /**
+   * Their commands `in: "setup"` run on the setup's own network (ADR
+   * 0257): the sandbox is one this preparation made, holding its base
+   * alone.
+   */
   network: boolean;
+  /**
+   * The sandbox is one the chat already used, and its Environment's setup
+   * has a network of its own: a command `in: "setup"` cannot have it here.
+   * It asks for a new sandbox (`requested`) and waits for it.
+   */
+  kept: boolean;
+  /** A run asked for the setup's network in a kept sandbox. */
+  requested: boolean;
   /** The owner wrote the turn being prepared, so their secrets may reach it. */
   ownerAuthored: boolean;
   /** When the setup's time is up: its commands end by then. */
   deadline: string;
 }
 
-/** The base a chat's workspace stands on, as workflows read it. */
-function workspaceJsonOrNull(value: Json | null): Json {
-  const base = parseWorkspaceBase(value);
-  return base ? { ref: base.ref, commit: base.commit } : null;
+/**
+ * A command of a setup's run waits for the sandbox this preparation is
+ * making for it (ADR 0355): asked again shortly, within the setup's time
+ * rather than the command's own.
+ */
+export class SetupSandboxPendingError extends Error {
+  constructor() {
+    super(
+      "The workspace is being made again for the setup's network; the command starts once it is ready.",
+    );
+    this.name = "SetupSandboxPendingError";
+  }
 }
 
 export function parseSetupRun(value: Json | null): SetupRunRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const { build, network, ownerAuthored, deadline } = value;
-  return typeof build === "string" && typeof deadline === "string"
+  const { event, network, kept, requested, ownerAuthored, deadline } = value;
+  return typeof event === "string" && typeof deadline === "string"
     ? {
-        build,
+        event,
         network: network === true,
+        kept: kept === true,
+        requested: requested === true,
         ownerAuthored: ownerAuthored === true,
         deadline,
       }
     : null;
+}
+
+/** A setup's record as its column stores it. */
+function setupRunJson(record: SetupRunRecord): Json {
+  return { ...record };
+}
+
+/**
+ * A kept sandbox made again for its setup's network (ADR 0355): the new
+ * one, whether the Environment's setup settled in it, and what the agent
+ * is told when it did not.
+ */
+interface SetupReplacement {
+  sandboxProviderId: string;
+  settled: boolean;
+  note?: string;
+}
+
+/** The Environment's setup did not settle in a sandbox made for it. */
+class SetupReplacementError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SetupReplacementError";
+  }
+}
+
+/** The runs of a setup's event, as a note names them. */
+function setupRunsText(outcome: WaitedEventOutcome): string {
+  return outcome.runs
+    .map((run) => `${run.workflowName} (run ${run.id})`)
+    .join(", ");
+}
+
+/**
+ * What of a setup's event did not succeed (ADR 0355), one line each: a run
+ * that failed or was canceled, and a listener that started no run.
+ */
+function setupHookFailures(outcome: WaitedEventOutcome): string[] {
+  return [
+    ...outcome.runs
+      .filter((run) => run.status !== "completed")
+      .map(
+        (run) =>
+          `${run.workflowName} (run ${run.id}) ${run.status === "canceled" ? "was canceled" : "failed"}${run.error ? `: ${run.error}` : ""}`,
+      ),
+    ...outcome.unstarted.map(
+      (listener) =>
+        `${listener.workflowName} did not start: ${listener.reason}`,
+    ),
+  ];
 }
 
 /** How a delivered input was taken: the protocol's dispatch, or `message_only`. */
@@ -2212,10 +2287,10 @@ export class AgentSessionsService {
     this.archiveResources = handler;
   }
 
-  private setupWorkflows?: SetupWorkflowRunner;
-  /** Late-bound: runs are a sibling service (ADR 0324). */
-  setSetupWorkflowRunner(runner: SetupWorkflowRunner): void {
-    this.setupWorkflows = runner;
+  private setupHooks?: SetupHooks;
+  /** Late-bound: triggers and runs are sibling services (ADR 0355). */
+  setSetupHooks(hooks: SetupHooks): void {
+    this.setupHooks = hooks;
   }
 
   private sessionActionHandler?: (
@@ -6934,6 +7009,17 @@ export class AgentSessionsService {
               (await this.setupOutcomeOf(session.allocation_id))?.run ?? null,
           }
         : undefined;
+    // Whether a project automation is bound to a workspace's setup event
+    // at all (ADR 0355): asked once, before anything is read from a sandbox.
+    // A chat in a folder on a person's computer records no such event: its
+    // runs' commands run in a sandbox.
+    const hookBound =
+      agent.topology !== "native" && this.setupHooks
+        ? await this.setupHooks.events.bound({
+            projectId,
+            kind: WORKSPACE_SETUP_EVENT,
+          })
+        : false;
     let workspace: EnsuredWorkspace = { workingDirectory: "" };
     let modelAccess: AttemptStart["modelAccess"] = { kind: "host" };
     let secrets: Record<string, string> = {};
@@ -6978,8 +7064,12 @@ export class AgentSessionsService {
               build: workspace.sandboxProviderId,
             })
           : undefined;
+        const moved =
+          baseBefore !== parseWorkspaceBase(session.workspace)?.commit;
         // Before anything reaches the sandbox: narrow, and a new one where a
-        // setup must run on its own network again (ADR 0257).
+        // setup must run on its own network again (ADR 0257), unless a
+        // project automation listens for the setup of one the chat already
+        // set up: then it stays, and the workflow decides (ADR 0355).
         const prepared = await this.prepareSetupSandbox({
           identity,
           projectId,
@@ -6990,23 +7080,26 @@ export class AgentSessionsService {
           sandboxProviderId: workspace.sandboxProviderId,
           created: workspace.created === true,
           widens: reused ? undefined : setupNetwork.widens,
-          moved: baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+          hookBound,
+          moved,
           phases,
         });
         if (prepared.note) notes.push(prepared.note);
-        const { sandboxProviderId, fresh } = prepared;
-        if (sandboxProviderId !== workspace.sandboxProviderId) {
-          workspace = { ...workspace, sandboxProviderId };
+        // The turn's sandbox is another one from here on.
+        const adopt = async (id: string) => {
+          if (id === workspace.sandboxProviderId) return;
+          workspace = { ...workspace, sandboxProviderId: id };
           session = await this.db
             .selectFrom("agent_sessions")
             .selectAll()
             .where("id", "=", sessionId)
             .executeTakeFirstOrThrow();
-        }
+        };
+        await adopt(prepared.sandboxProviderId);
         // The Environment's setup on its own network, before Git, grants,
         // secrets and files reach the sandbox (ADR 0257).
         const widened =
-          !reused && fresh && setupNetwork.widens && runtime.setup
+          !reused && prepared.fresh && setupNetwork.widens && runtime.setup
             ? await this.setUpOnItsNetwork({
                 identity,
                 projectId,
@@ -7017,60 +7110,88 @@ export class AgentSessionsService {
                 egress: setupNetwork.widens.egress,
                 base: setupNetwork.widens.base,
                 provider: runtime.provider,
-                sandboxProviderId,
+                sandboxProviderId: prepared.sandboxProviderId,
                 ownerAuthored,
-                moved:
-                  baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+                moved,
+                hookBound,
                 phases,
                 signal,
               })
             : undefined;
+        // A kept sandbox's setup is its listening workflows' to decide (ADR
+        // 0355); one of them may have had it made again for the setup's
+        // network.
+        const kept =
+          !reused && prepared.kept && setupNetwork.widens && runtime.setup
+            ? await this.setUpKeptSandbox({
+                identity,
+                projectId,
+                session,
+                turn,
+                agent,
+                runtime,
+                setup: runtime.setup,
+                egress: setupNetwork.widens.egress,
+                base: setupNetwork.widens.base,
+                provider: runtime.provider,
+                sandboxProviderId: prepared.sandboxProviderId,
+                ownerAuthored,
+                moved,
+                phases,
+                signal,
+              })
+            : undefined;
+        if (kept?.replaced) await adopt(kept.replaced);
+        const sandboxProviderId = kept?.replaced ?? prepared.sandboxProviderId;
+        const fresh = prepared.fresh || kept?.replaced !== undefined;
+        // The sandbox holds its base alone and what a setup made on it.
+        const afterSetup =
+          widened !== undefined || kept?.replaced !== undefined;
+        const onNetwork = widened ?? kept;
         // The log's tail may print a secret the setup named, or one an
         // earlier workspace held (ADR 0206). Read now, not kept: this turn's
         // secrets arrive below.
-        const widenedNote = widened?.note
+        const widenedNote = onNetwork?.note
           ? new SecretMask(
               await this.sessionSecretValues({
                 identity,
                 projectId,
                 sessionId: session.id,
               }),
-            ).text(widened.note)
+            ).text(onNetwork.note)
           : undefined;
         if (widenedNote) notes.push(widenedNote);
-        // A setup that names a workflow runs its Environment's part on the
-        // checkout before the chat's grants, secrets and the member's files
-        // are in the sandbox (ADR 0324), so a project-owned setup run never
-        // sees a member's personal values. A setup on its own network did so
-        // above. It takes every grant out of the sandbox, so where another
-        // session's turn runs in the same workspace (ADR 0322) none of the
-        // setup runs: a later turn runs it when no other works there.
-        const earlyDue =
+        // A setup a project automation listens for runs its Environment's
+        // part on the checkout before the chat's grants, secrets and the
+        // member's files are in the sandbox (ADRs 0324, 0355), so a
+        // project-owned setup run never sees a member's personal values. A
+        // setup on its own network did so above. It takes every grant out
+        // of the sandbox, so where another session's turn runs in the same
+        // workspace (ADR 0322) none of the setup runs: a later turn runs it
+        // when no other works there.
+        const before =
           !reused &&
-          !widened &&
+          !onNetwork &&
           !setupNetwork.widens &&
           !setupNetwork.refusal &&
-          runtime.setup?.workflow !== undefined;
-        const othersRun =
-          earlyDue && !fresh && (await this.othersRunInWorkspace(session));
-        const early =
-          earlyDue && !othersRun && runtime.setup
+          hookBound
             ? await this.setUpBeforeCredentials({
                 identity,
                 projectId,
                 session,
                 turn,
                 runtime,
-                setup: runtime.setup,
                 provider: runtime.provider,
                 sandboxProviderId,
                 ownerAuthored,
-                moved:
-                  baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+                moved,
+                fresh,
                 phases,
                 signal,
               })
             : undefined;
+        const othersRun = before?.deferred === true;
+        const early = othersRun ? undefined : before;
         const earlyNote = early?.note
           ? new SecretMask(await secretValuesOfChat()).text(early.note)
           : undefined;
@@ -7089,7 +7210,7 @@ export class AgentSessionsService {
           },
           provider: runtime.provider,
           sandboxProviderId,
-          afterSetup: widened !== undefined,
+          afterSetup,
           ...(runtime.checkout ? { checkout: runtime.checkout } : {}),
           phases,
         });
@@ -7223,7 +7344,7 @@ export class AgentSessionsService {
         const setup =
           reused ||
           othersRun ||
-          (widened && !widened.settled) ||
+          (onNetwork && !onNetwork.settled) ||
           (early && !early.settled) ||
           (session.workspace_session_id && !fresh && setupNetwork.widens)
             ? undefined
@@ -7244,8 +7365,7 @@ export class AgentSessionsService {
                 personalAllowed:
                   runtime.personalCredentials === true && credentialsAllowed,
                 ownerAuthored: credentialsAllowed,
-                moved:
-                  baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
+                moved,
                 phases,
                 signal,
               });
@@ -7260,7 +7380,7 @@ export class AgentSessionsService {
           setupGate &&
           !reused &&
           !setup &&
-          !widened &&
+          !onNetwork &&
           session.workspace_session_id &&
           setupNetwork.widens
         ) {
@@ -7274,7 +7394,7 @@ export class AgentSessionsService {
           setupGate &&
           !reused &&
           (setup !== undefined ||
-            widened !== undefined ||
+            onNetwork !== undefined ||
             early !== undefined) &&
           !signal.aborted
         )
@@ -7335,7 +7455,7 @@ export class AgentSessionsService {
           timeoutMinutes:
             runtime.setup?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES,
           command: runtime.setup?.command,
-          workflow: runtime.setup?.workflow,
+          hook: hookBound,
           personalAllowed: runtime.personalCredentials === true,
         }),
         // Another chat's turn makes or sets up the workspace they share.
@@ -9382,9 +9502,12 @@ export class AgentSessionsService {
    * has not run them yet. With `network`, only the Environment's part runs,
    * on its own network, in a sandbox holding the base alone (ADR 0257). An
    * Environment's setup that names a network runs nowhere else; the agent
-   * is told why. The chat shows the setup while it runs. Returns a note for
-   * the agent when it failed (it runs again before the next turn), and
-   * whether it settled: ran, or had nothing to run.
+   * is told why. With `hook`, a project automation listens for the setup's
+   * event (ADR 0355): it is recorded after the Environment's command and
+   * the turn waits for the runs it starts. The chat shows the setup while
+   * it runs. Returns a note for the agent when it failed (it runs again
+   * before the next turn), and whether it settled: ran, or had nothing to
+   * run.
    */
   private async prepareWorkspaceSetup(input: {
     identity: Identity;
@@ -9412,9 +9535,27 @@ export class AgentSessionsService {
           workingDirectory: string;
         };
     environment?: AdmittedSetup;
+    /**
+     * The setup's event, when a project automation listens for it (ADR
+     * 0355). `"under-way"`: its runs wait for this very command.
+     */
+    hook?:
+      | {
+          sandbox: SetupSandbox;
+          /** The sandbox stays as it is: no command runs by itself. */
+          kept: boolean;
+          /** The Environment's name, as the event says it. */
+          environment: string;
+          /**
+           * Make the kept sandbox again for the setup's network, when one
+           * of the event's runs asks for it.
+           */
+          replace?: () => Promise<SetupReplacement>;
+        }
+      | "under-way";
     /** The placement may hold the owner's credentials and the owner wrote the turn. */
     personalAllowed: boolean;
-    /** The owner wrote the turn (setup secrets may reach its workflow). */
+    /** The owner wrote the turn (setup secrets may reach its event's runs). */
     ownerAuthored?: boolean;
     /** This preparation moved the workspace's base (ADR 0178). */
     moved?: boolean;
@@ -9448,12 +9589,8 @@ export class AgentSessionsService {
       ? workspaceSetupNetworkRefusedNote({ reason: refusal })
       : undefined;
     const environment = refused ? undefined : input.environment;
-    // A setup workflow runs its commands in a sandbox (ADR 0324).
-    const workflowSkipped =
-      environment?.workflow && runner.kind === "native"
-        ? `[Workspace] The Environment's setup workflow ${environment.workflow} did not run: this chat works in a folder on this computer, and a setup workflow runs its commands in a sandbox.`
-        : undefined;
-    if (!environment && !personal)
+    const asked = refused ? undefined : input.hook;
+    if (!environment && !personal && !asked)
       return { ...(refused ? { note: refused } : {}), settled: true };
     const timeoutMinutes =
       input.environment?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES;
@@ -9475,38 +9612,38 @@ export class AgentSessionsService {
       ...(personal ? { personal } : {}),
       ...(base ? { base } : {}),
     };
-    const workflowName =
-      runner.kind === "sandbox" ? environment?.workflow : undefined;
     // The workspace's own session, whichever session's turn sets it up
     // (ADR 0322): a shared subsession that arrived first sets up its
-    // workspace session's workspace, so the workflow runs, is stamped and
-    // is recorded for that session, and its commands hear whether that
-    // session's workspace was made again.
+    // workspace session's workspace, so the setup's event is that
+    // session's, and its commands hear whether that session's workspace
+    // was made again.
     const setUpFor =
-      runner.kind === "sandbox" && session.workspace_session_id
-        ? await this.db
-            .selectFrom("agent_sessions")
-            .selectAll()
-            .where("id", "=", session.workspace_session_id)
-            .executeTakeFirstOrThrow()
+      runner.kind === "sandbox"
+        ? await this.workspaceSession(session)
         : session;
-    const workflow = workflowName
-      ? {
-          name: workflowName,
-          run: ({ reason }: { reason: SetupReason }) =>
-            this.runSetupWorkflow({
-              identity: input.identity,
-              projectId: input.projectId,
-              session: setUpFor,
-              workflowName,
-              reason,
-              network: Boolean(widening),
-              ownerAuthored: input.ownerAuthored === true,
-              timeoutMinutes,
-              signal: input.signal,
-            }),
-        }
-      : undefined;
+    const hook: SetupHook | "under-way" | undefined =
+      runner.kind !== "sandbox" || asked === undefined
+        ? undefined
+        : asked === "under-way"
+          ? asked
+          : {
+              kept: asked.kept,
+              run: ({ cause }) =>
+                this.runSetupHook({
+                  identity: input.identity,
+                  projectId: input.projectId,
+                  session: setUpFor,
+                  cause,
+                  sandbox: asked.sandbox,
+                  environment: asked.environment,
+                  network: Boolean(widening),
+                  ...(asked.replace ? { replace: asked.replace } : {}),
+                  ownerAuthored: input.ownerAuthored === true,
+                  timeoutMinutes,
+                  ...(input.phases ? { phases: input.phases } : {}),
+                  signal: input.signal,
+                }),
+            };
     const unavailable = (error: unknown) => ({
       // The turn goes on without it, as after a failed command (ADR 0208).
       status: "unavailable" as const,
@@ -9559,7 +9696,7 @@ export class AgentSessionsService {
           ...(runner.isolated ? { isolated: runner.isolated } : {}),
           rebuilt: setUpFor.workspace_generation > 1,
           moved: input.moved === true,
-          ...(workflow ? { workflow } : {}),
+          ...(hook ? { hook } : {}),
           ...(input.phases ? { phases: input.phases } : {}),
           signal: input.signal,
           onRun,
@@ -9587,7 +9724,7 @@ export class AgentSessionsService {
         : outcome.status === "failed"
           ? workspaceSetupFailedNote({ outcome, timeoutMinutes, logPath })
           : undefined;
-    const notes = [refused, workflowSkipped, note].filter(Boolean).join("\n\n");
+    const notes = [refused, note].filter(Boolean).join("\n\n");
     return {
       ...(notes ? { note: notes } : {}),
       settled: outcome.status === "succeeded" || outcome.status === "current",
@@ -9595,61 +9732,236 @@ export class AgentSessionsService {
   }
 
   /**
-   * Run the Environment's setup workflow for this chat (ADR 0324) and wait
-   * for it. While it runs, the chat records it, so its commands may run in
-   * the workspace being set up, `in: "setup"` included; never after.
+   * The workspace's own session (ADR 0322): the one a shared subsession
+   * works in the workspace of, or the session itself.
    */
-  private async runSetupWorkflow(input: {
+  private async workspaceSession(session: SessionRow): Promise<SessionRow> {
+    return session.workspace_session_id
+      ? this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", session.workspace_session_id)
+          .executeTakeFirstOrThrow()
+      : session;
+  }
+
+  /**
+   * A workspace's setup event (ADR 0355), not recorded yet: the chat's
+   * snapshot and, in `detail`, why it is set up, its Environment, the base
+   * it stands on, the base this sandbox last set up on, and whether the
+   * sandbox is kept as it set up before.
+   */
+  private setupEvent(input: {
+    /** The workspace's own session. */
+    session: SessionRow;
+    environment: string;
+    cause: SetupCause;
+    sandbox: SetupSandbox;
+  }): Promise<PendingSessionEvent> {
+    const base = parseWorkspaceBase(input.session.workspace);
+    // Every sandbox chat stands on a base by now (ADR 0344).
+    if (!base) throw new Error("A workspace being set up stands on a base");
+    return pendingSessionEvent({
+      db: this.db,
+      sessionId: input.session.id,
+      kind: WORKSPACE_SETUP_EVENT,
+      detail: {
+        reason: input.cause.reason,
+        environment: input.environment,
+        workspace: { ref: base.ref, commit: base.commit },
+        previous: input.cause.previousBase
+          ? { commit: input.cause.previousBase }
+          : null,
+        sandbox: input.sandbox,
+      },
+    });
+  }
+
+  /**
+   * The setup event of a sandbox whose Environment's setup is due, when a
+   * project automation listens for it (ADR 0355): asked before anything
+   * runs or is replaced, of exactly what the event will say. `kept` says
+   * the sandbox is one the chat already used and set up, so nothing runs
+   * there by itself; one that never set up (made for this turn, or whose
+   * earlier setup failed) is `new` to its setup, and the Environment's
+   * command runs first. Undefined when the setup is not due here, the chat
+   * stands on no base, or nobody listens.
+   */
+  private async setupHookOf(input: {
+    session: SessionRow;
+    runtime: AgentExecutionRuntime;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    /** This preparation made the sandbox. */
+    fresh: boolean;
+    moved: boolean;
+    hookBound: boolean;
+    /** What the sandbox recorded, when it was read already. */
+    recorded?: SetupRecord | null;
+  }): Promise<{ sandbox: SetupSandbox; kept: boolean } | undefined> {
+    const hooks = this.setupHooks;
+    if (!input.hookBound || !hooks) return undefined;
+    const setUpFor = await this.workspaceSession(input.session);
+    const base = parseWorkspaceBase(input.session.workspace)?.commit;
+    const cause = environmentSetupCause({
+      ...(input.runtime.setup?.command !== undefined
+        ? { environment: input.runtime.setup.command }
+        : {}),
+      ...(base ? { base } : {}),
+      recorded:
+        input.recorded !== undefined
+          ? input.recorded
+          : await readSetupRecord({
+              provider: input.provider,
+              sandboxId: input.sandboxProviderId,
+              projectDir: this.projectDir(input.provider),
+            }),
+      rebuilt: setUpFor.workspace_generation > 1,
+      moved: input.moved,
+    });
+    if (!cause || !parseWorkspaceBase(setUpFor.workspace)) return undefined;
+    // Set up here before: what happens next is the workflow's to say.
+    const kept = !input.fresh && cause.previousBase !== undefined;
+    const sandbox: SetupSandbox = kept ? "kept" : "new";
+    const listeners = await hooks.events.listeners({
+      event: await this.setupEvent({
+        session: setUpFor,
+        environment: input.runtime.environmentName,
+        cause,
+        sandbox,
+      }),
+    });
+    if (listeners.length === 0) return undefined;
+    return { sandbox, kept };
+  }
+
+  /**
+   * Record a workspace's setup event (ADR 0355) and wait for the runs it
+   * starts for the project's automations, within the setup's time. While
+   * they run, the chat records the event, so their commands may run in the
+   * workspace being set up, `in: "setup"` included; never after. In a kept
+   * sandbox whose Environment's setup has a network of its own, the first
+   * such command asks for a new sandbox: `replace` makes it, and the
+   * time that takes is given back to the runs.
+   */
+  private async runSetupHook(input: {
     identity: Identity;
     projectId: string;
+    /** The workspace's own session. */
     session: SessionRow;
-    workflowName: string;
-    reason: SetupReason;
+    cause: SetupCause;
+    sandbox: SetupSandbox;
+    environment: string;
+    /** Commands `in: "setup"` widen this sandbox (ADR 0257). */
     network: boolean;
+    replace?: () => Promise<SetupReplacement>;
     ownerAuthored: boolean;
     timeoutMinutes: number;
+    phases?: PhaseTimer;
     signal: AbortSignal;
-  }): Promise<SetupWorkflowOutcome> {
-    const runner = this.setupWorkflows;
-    if (!runner)
-      return {
-        status: "failed",
-        timedOut: false,
-        error: "This host does not run setup workflows",
-      };
+  }): Promise<SetupHookOutcome> {
+    const hooks = this.setupHooks;
+    if (!hooks) return { status: "succeeded" };
     const { session } = input;
-    // This build of the workspace: the run is stamped with it, and only a
-    // run for the build in progress may run commands in setup.
-    const build = randomUUID();
-    const timeoutMs = input.timeoutMinutes * 60_000;
-    const record: SetupRunRecord = {
-      build,
-      network: input.network,
+    const event = await this.setupEvent(input);
+    const listeners = await hooks.events.listeners({ event });
+    // Nobody listens after all: nothing is recorded, and nothing waits.
+    if (listeners.length === 0) return { status: "succeeded" };
+    const clock = { deadline: Date.now() + input.timeoutMinutes * 60_000 };
+    const record = (state: {
+      network: boolean;
+      kept: boolean;
+    }): SetupRunRecord => ({
+      event: event.id,
+      ...state,
+      requested: false,
       ownerAuthored: input.ownerAuthored,
-      deadline: new Date(Date.now() + timeoutMs).toISOString(),
-    };
+      deadline: new Date(clock.deadline).toISOString(),
+    });
     await this.db
       .updateTable("agent_sessions")
-      .set({ setup_run: record as unknown as Json })
+      .set({
+        setup_run: setupRunJson(
+          record({ network: input.network, kept: input.replace !== undefined }),
+        ),
+      })
       .where("id", "=", session.id)
       .execute();
-    try {
-      return await runner.run({
+    // The wait for the event's runs is the attempt's `setup.workflow`
+    // phase (ADR 0354); a sandbox made meanwhile is timed as its own.
+    const phases = input.phases ?? UNTIMED;
+    const waiting = { end: await phases.start("setup.workflow") };
+    const made: { sandboxId?: string; underWay?: boolean } = {};
+    const cancel = (reason: string) =>
+      hooks.events.cancel({
         tenantId: input.identity.tenantId,
-        projectId: input.projectId,
-        workflowName: input.workflowName,
-        setupFor: { sessionId: session.id, build },
-        input: {
-          sessionId: session.id,
-          key: session.chat_key,
-          agentId: session.agent_id,
-          reason: input.reason,
-          workspace: workspaceJsonOrNull(session.workspace),
-        },
-        timeoutMs,
-        signal: input.signal,
+        event,
+        reason,
       });
+    try {
+      await hooks.events.record({ event });
+      const outcome = await hooks.events.settle({
+        event,
+        listeners,
+        deadlineAt: () => clock.deadline,
+        signal: input.signal,
+        onPoll: async () => {
+          if (!input.replace || made.sandboxId) return;
+          const chat = await this.db
+            .selectFrom("agent_sessions")
+            .select("setup_run")
+            .where("id", "=", session.id)
+            .executeTakeFirst();
+          if (!parseSetupRun(chat?.setup_run ?? null)?.requested) return;
+          // A run asked for the setup's network (ADR 0355): a new sandbox
+          // holding the base alone, set up by the Environment's command.
+          await waiting.end();
+          const began = Date.now();
+          made.underWay = true;
+          const replaced = await input.replace();
+          made.underWay = false;
+          made.sandboxId = replaced.sandboxProviderId;
+          if (!replaced.settled)
+            throw new SetupReplacementError(
+              replaced.note ??
+                "The Environment's setup did not finish in the new sandbox.",
+            );
+          clock.deadline += Date.now() - began;
+          await this.db
+            .updateTable("agent_sessions")
+            .set({
+              setup_run: setupRunJson(record({ network: true, kept: false })),
+            })
+            .where("id", "=", session.id)
+            .where(sql<boolean>`setup_run->>'event' = ${event.id}`)
+            .execute();
+          waiting.end = await phases.start("setup.workflow");
+        },
+      });
+      if (outcome.status === "aborted") {
+        await cancel("The turn it set up for stopped");
+        return { status: "aborted" };
+      }
+      if (outcome.status === "timed-out") {
+        await cancel("Setup timed out");
+        return {
+          status: "failed",
+          timedOut: true,
+          error: `The setup's time ran out before its workflows ended, so they were canceled: ${setupRunsText(outcome) || "none had started"}.`,
+        };
+      }
+      const failed = setupHookFailures(outcome);
+      if (failed.length > 0)
+        return { status: "failed", timedOut: false, error: failed.join("\n") };
+      return {
+        status: "succeeded",
+        ...(made.sandboxId ? { sandboxId: made.sandboxId } : {}),
+      };
     } catch (error) {
+      await cancel("Setup failed");
+      // A sandbox that may still be wide fails the preparation (ADR 0257),
+      // and so does one that could not be made again: the old one is gone.
+      if (error instanceof SetupNetworkError || made.underWay) throw error;
       if (input.signal.aborted) return { status: "aborted" };
       return {
         status: "failed",
@@ -9657,21 +9969,22 @@ export class AgentSessionsService {
         error: error instanceof Error ? error.message : String(error),
       };
     } finally {
-      // The run is no longer the chat's setup; then nothing it started
-      // goes on, and a sandbox it widened is narrow again, before the
-      // chat's credentials arrive. A failure here fails the preparation.
+      await waiting.end();
+      // The event is no longer the chat's setup; then nothing its runs
+      // started goes on, and a sandbox they widened is narrow again, before
+      // the chat's credentials arrive. A failure here fails the preparation.
       await this.db
         .updateTable("agent_sessions")
         .set({ setup_run: null })
         .where("id", "=", session.id)
-        .where(sql<boolean>`setup_run->>'build' = ${build}`)
+        .where(sql<boolean>`setup_run->>'event' = ${event.id}`)
         .execute();
-      await runner.end({
+      await hooks.end({
         tenantId: input.identity.tenantId,
         projectId: input.projectId,
         sessionId: session.id,
-        build,
-        network: input.network,
+        event: event.id,
+        network: input.network || made.sandboxId !== undefined,
       });
     }
   }
@@ -9707,7 +10020,9 @@ export class AgentSessionsService {
    * grant, secret, gateway variable or file of anyone's, widened to the
    * setup's hosts only, and narrowed once it ended. Only the secrets the
    * setup names reach it, as its environment. The session's work, grants,
-   * secrets and files arrive after.
+   * secrets and files arrive after. Where a project automation listens,
+   * the setup's event follows the command (ADR 0355); `hook: "under-way"`
+   * says its runs already wait for this command.
    */
   private async setUpOnItsNetwork(input: {
     identity: Identity;
@@ -9722,6 +10037,9 @@ export class AgentSessionsService {
     sandboxProviderId: string;
     ownerAuthored: boolean;
     moved: boolean;
+    /** A project automation is bound to the setup's event. */
+    hookBound?: boolean;
+    hook?: "under-way";
     phases: PhaseTimer;
     signal: AbortSignal;
   }): Promise<{ note?: string; settled: boolean }> {
@@ -9777,6 +10095,18 @@ export class AgentSessionsService {
       names: input.setup.secrets ?? [],
       ownerAuthored: input.ownerAuthored,
     });
+    // Who listens for this setup, asked of what its event will say.
+    const listening =
+      input.hook ??
+      (await this.setupHookOf({
+        session,
+        runtime: input.runtime,
+        provider,
+        sandboxProviderId: input.sandboxProviderId,
+        fresh: true,
+        moved: input.moved,
+        hookBound: input.hookBound === true,
+      }));
     // While it may hold the sandbox on its network, other workflows'
     // session commands wait (ADR 0324); a crash leaves a bound, not a lock.
     const widened = workspaceCopyId(session);
@@ -9800,6 +10130,16 @@ export class AgentSessionsService {
           network: { egress: input.egress, env },
         },
         environment: input.setup,
+        ...(listening === "under-way"
+          ? { hook: listening }
+          : listening
+            ? {
+                hook: {
+                  ...listening,
+                  environment: input.runtime.environmentName,
+                },
+              }
+            : {}),
         personalAllowed: false,
         ownerAuthored: input.ownerAuthored,
         moved: input.moved,
@@ -9823,11 +10163,17 @@ export class AgentSessionsService {
   }
 
   /**
-   * The Environment's part of a setup that names a workflow (ADR 0324), in
-   * the sandbox the turn uses, with its checkout seeded: when it is due,
-   * the chat's grants, secrets and the member's files are taken out first
-   * and come back after, and it runs with only the secrets the setup
-   * names. Undefined when it is not due.
+   * The Environment's part of a setup a project automation listens for
+   * (ADRs 0324, 0355), in the sandbox the turn uses, with its checkout
+   * seeded: when it is due, the chat's grants, secrets and the member's
+   * files are taken out first and come back after, and it runs with only
+   * the secrets the setup names. In a sandbox this preparation made, or one
+   * that never set up, the Environment's command runs and its event
+   * follows; in one the chat already set up, the event alone: what runs
+   * there is the listening workflow's to say. Undefined when it is not due
+   * or nobody listens (the command then runs with the rest of the setup);
+   * `deferred` when another session's turn runs in the workspace, so none
+   * of the setup runs now.
    */
   private async setUpBeforeCredentials(input: {
     identity: Identity;
@@ -9835,29 +10181,32 @@ export class AgentSessionsService {
     session: SessionRow;
     turn: Turn;
     runtime: AgentExecutionRuntime;
-    setup: AdmittedSetup;
     provider: SandboxProvider;
     sandboxProviderId: string;
     ownerAuthored: boolean;
     moved: boolean;
+    /** This preparation made the sandbox. */
+    fresh: boolean;
     phases: PhaseTimer;
     signal: AbortSignal;
-  }): Promise<{ note?: string; settled: boolean } | undefined> {
-    const { identity, projectId, session, provider, setup } = input;
+  }): Promise<
+    { note?: string; settled: boolean; deferred?: true } | undefined
+  > {
+    const { identity, projectId, session, provider } = input;
+    const setup = input.runtime.setup;
     const projectDir = this.projectDir(provider);
-    const due = environmentSetupDue({
-      ...(setup.command !== undefined ? { environment: setup.command } : {}),
-      ...(setup.workflow ? { workflow: setup.workflow } : {}),
-      ...(parseWorkspaceBase(session.workspace)
-        ? { base: parseWorkspaceBase(session.workspace)?.commit }
-        : {}),
-      recorded: await readSetupRecord({
-        provider,
-        sandboxId: input.sandboxProviderId,
-        projectDir,
-      }),
+    const hook = await this.setupHookOf({
+      session,
+      runtime: input.runtime,
+      provider,
+      sandboxProviderId: input.sandboxProviderId,
+      fresh: input.fresh,
+      moved: input.moved,
+      hookBound: true,
     });
-    if (!due) return undefined;
+    if (!hook) return undefined;
+    if (!input.fresh && (await this.othersRunInWorkspace(session)))
+      return { settled: false, deferred: true };
     // The checkout as the turn has it, then nothing of anyone's.
     await this.prepareSandboxGit({
       identity,
@@ -9883,7 +10232,7 @@ export class AgentSessionsService {
       projectId,
       session,
       runtime: input.runtime,
-      names: setup.secrets ?? [],
+      names: setup?.secrets ?? [],
       ownerAuthored: input.ownerAuthored,
     });
     return this.prepareWorkspaceSetup({
@@ -9897,13 +10246,141 @@ export class AgentSessionsService {
         sandboxProviderId: input.sandboxProviderId,
         isolated: { env },
       },
-      environment: setup,
+      ...(setup ? { environment: setup } : {}),
+      hook: { ...hook, environment: input.runtime.environmentName },
       personalAllowed: false,
       ownerAuthored: input.ownerAuthored,
       moved: input.moved,
       phases: input.phases,
       signal: input.signal,
     });
+  }
+
+  /**
+   * The setup of a sandbox the chat already used and set up, whose
+   * Environment's setup has a network of its own, where a project
+   * automation listens for it (ADR 0355). Nothing is replaced and the
+   * Environment's command does not run by itself: the checkout moves to
+   * the base in place (Git sends what it lacks; ignored files such as
+   * installed packages stay), the chat's grants, secrets and the member's
+   * files are taken out as before any setup run (ADR 0324), and the
+   * setup's event is recorded and waited for.
+   *
+   * A run that asks for the setup's network (`exec` with `in: "setup"`)
+   * gets a new sandbox at that point, by the rule that only a sandbox
+   * holding its base alone is widened (ADR 0257): made in the same
+   * Allocation, its base checked out, the Environment's command run in it
+   * on that network; `replaced` names it, and the session's saved work
+   * arrives after, as after any setup on its own network. With no such
+   * run, the sandbox, its checkout and what setup installed stay, and the
+   * setup is recorded done for this base.
+   */
+  private async setUpKeptSandbox(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    turn: Turn;
+    agent: RegisteredCodingAgent;
+    runtime: AgentExecutionRuntime;
+    setup: AdmittedSetup;
+    egress: SandboxEgress;
+    base: string;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    ownerAuthored: boolean;
+    moved: boolean;
+    phases: PhaseTimer;
+    signal: AbortSignal;
+  }): Promise<{ note?: string; settled: boolean; replaced?: string }> {
+    const { identity, projectId, session, provider } = input;
+    await this.prepareSandboxGit({
+      identity,
+      projectId,
+      sessionId: session.id,
+      provider,
+      sandboxProviderId: input.sandboxProviderId,
+      seedOnly: true,
+      ...(input.runtime.checkout ? { checkout: input.runtime.checkout } : {}),
+      phases: input.phases,
+    });
+    await removeSessionCredentials({
+      provider,
+      sandboxId: input.sandboxProviderId,
+    });
+    await removePersonalEnvironment({
+      provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(provider),
+    });
+    const made: { sandboxProviderId?: string; note?: string } = {};
+    const replace = async (): Promise<SetupReplacement> => {
+      const next = await this.replaceSetupSandbox({
+        identity,
+        projectId,
+        session,
+        agent: input.agent,
+        runtime: input.runtime,
+        provider,
+        sandboxProviderId: input.sandboxProviderId,
+        moved: input.moved,
+        phases: input.phases,
+      });
+      made.sandboxProviderId = next.sandboxProviderId;
+      if (next.note) made.note = next.note;
+      const ran = await this.setUpOnItsNetwork({
+        identity,
+        projectId,
+        session: await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", session.id)
+          .executeTakeFirstOrThrow(),
+        turn: input.turn,
+        runtime: input.runtime,
+        setup: input.setup,
+        egress: input.egress,
+        base: input.base,
+        provider,
+        sandboxProviderId: next.sandboxProviderId,
+        ownerAuthored: input.ownerAuthored,
+        moved: input.moved,
+        hook: "under-way",
+        phases: input.phases,
+        signal: input.signal,
+      });
+      return { sandboxProviderId: next.sandboxProviderId, ...ran };
+    };
+    const result = await this.prepareWorkspaceSetup({
+      identity,
+      projectId,
+      session,
+      turn: input.turn,
+      runner: {
+        kind: "sandbox",
+        provider,
+        sandboxProviderId: input.sandboxProviderId,
+        // Nothing of the Environment's runs here by itself.
+        isolated: { env: {} },
+      },
+      environment: input.setup,
+      hook: {
+        sandbox: "kept",
+        kept: true,
+        environment: input.runtime.environmentName,
+        replace,
+      },
+      personalAllowed: false,
+      ownerAuthored: input.ownerAuthored,
+      moved: input.moved,
+      phases: input.phases,
+      signal: input.signal,
+    });
+    const note = [made.note, result.note].filter(Boolean).join("\n\n");
+    return {
+      settled: result.settled,
+      ...(note ? { note } : {}),
+      ...(made.sandboxProviderId ? { replaced: made.sandboxProviderId } : {}),
+    };
   }
 
   /**
@@ -9971,8 +10448,16 @@ export class AgentSessionsService {
    * changed, the base moved, or it never finished), the sandbox is replaced
    * by a new one in the same Allocation, since only a sandbox holding its
    * base alone may be widened: the session's work comes back once the new
-   * one is narrow. Returns the turn's sandbox, whether this preparation
-   * made it, and a note for the agent.
+   * one is narrow.
+   *
+   * Unless a project automation listens for the setup of a sandbox the
+   * chat already set up (ADR 0355): then it stays (`kept`), and the
+   * workflow decides whether the setup's network is needed at all. Not
+   * while another session's turn runs in the workspace: taking its grants
+   * out would cut that turn off, so the sandbox is replaced as before.
+   *
+   * Returns the turn's sandbox, whether this preparation made it, and a
+   * note for the agent.
    */
   private async prepareSetupSandbox(input: {
     identity: Identity;
@@ -9986,11 +10471,19 @@ export class AgentSessionsService {
     created: boolean;
     /** The setup may run on its own network, on this base. */
     widens: { egress: SandboxEgress; base: string } | undefined;
+    /** A project automation is bound to the setup's event. */
+    hookBound: boolean;
     /** This preparation moved the workspace's base (ADR 0178). */
     moved: boolean;
     phases: PhaseTimer;
-  }): Promise<{ sandboxProviderId: string; fresh: boolean; note?: string }> {
-    const { identity, projectId, session, runtime, provider } = input;
+  }): Promise<{
+    sandboxProviderId: string;
+    fresh: boolean;
+    /** The sandbox stays for its setup's listeners to decide. */
+    kept?: true;
+    note?: string;
+  }> {
+    const { session, runtime, provider } = input;
     if (input.created || !runtime.allocation?.policy.sandbox?.setupEgress)
       return {
         sandboxProviderId: input.sandboxProviderId,
@@ -10006,25 +10499,67 @@ export class AgentSessionsService {
         .catch(() => {});
       throw error;
     });
-    const due =
-      input.widens &&
-      runtime.setup &&
-      environmentSetupDue({
-        ...(runtime.setup.command !== undefined
-          ? { environment: runtime.setup.command }
-          : {}),
-        ...(runtime.setup.workflow ? { workflow: runtime.setup.workflow } : {}),
-        base: input.widens.base,
-        recorded: await readSetupRecord({
-          provider,
-          sandboxId: input.sandboxProviderId,
-          projectDir: this.projectDir(provider),
-        }),
-      });
+    const used = { sandboxProviderId: input.sandboxProviderId, fresh: false };
+    if (!input.widens || !runtime.setup) return used;
+    const recorded = await readSetupRecord({
+      provider,
+      sandboxId: input.sandboxProviderId,
+      projectDir: this.projectDir(provider),
+    });
+    const due = environmentSetupDue({
+      ...(runtime.setup.command !== undefined
+        ? { environment: runtime.setup.command }
+        : {}),
+      base: input.widens.base,
+      recorded,
+    });
     // A shared subsession never rebuilds the workspace it shares (ADR
     // 0322): its workspace session's own turn does.
     if (!due || !session.sandbox_id || session.workspace_session_id)
-      return { sandboxProviderId: input.sandboxProviderId, fresh: false };
+      return used;
+    const hook = await this.setupHookOf({
+      session,
+      runtime,
+      provider,
+      sandboxProviderId: input.sandboxProviderId,
+      fresh: false,
+      moved: input.moved,
+      hookBound: input.hookBound,
+      recorded,
+    });
+    // Neither a command nor a listener: nothing would run in a new one.
+    if (runtime.setup.command === undefined && !hook) return used;
+    if (hook?.kept && !(await this.othersRunInWorkspace(session)))
+      return { ...used, kept: true };
+    const made = await this.replaceSetupSandbox(input);
+    return {
+      sandboxProviderId: made.sandboxProviderId,
+      fresh: true,
+      ...(made.note ? { note: made.note } : {}),
+    };
+  }
+
+  /**
+   * Replace a session's used sandbox by a new, empty one in the same
+   * Allocation (ADR 0257), for a setup on its own network. What changed
+   * since the last turn is saved first. Returns the new sandbox, and a
+   * note for the agent when something of the old one could not be kept.
+   */
+  private async replaceSetupSandbox(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    agent: RegisteredCodingAgent;
+    runtime: AgentExecutionRuntime;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    /** This preparation moved the workspace's base (ADR 0178). */
+    moved: boolean;
+    phases: PhaseTimer;
+  }): Promise<{ sandboxProviderId: string; note?: string }> {
+    const { identity, projectId, session, runtime, provider } = input;
+    if (!session.sandbox_id)
+      throw new Error("The workspace has no sandbox to make again");
     // Marked first, so a preparation that stops midway is finished by the
     // next one rather than left pointing at a sandbox that is gone.
     await this.db
@@ -10064,7 +10599,6 @@ export class AgentSessionsService {
       throw new Error("The workspace's new sandbox did not start");
     return {
       sandboxProviderId: workspace.sandboxProviderId,
-      fresh: true,
       ...(note ? { note } : {}),
     };
   }
@@ -13252,18 +13786,22 @@ export class AgentSessionsService {
   }
 
   /**
-   * Where a workflow's command runs in a chat (ADR 0324). From the chat's
-   * own setup run (stamped by Work with this chat and the workspace build
-   * in progress), the workspace being set up as it stands, with
-   * the setup's network and secrets for a command `in: "setup"`. From any
-   * other run, the workspace a person would reach, started as its next
-   * turn would start it; access is the caller's to have settled.
+   * Where a workflow's command runs in a chat (ADR 0324). From a run the
+   * chat's setup event started (stamped by the dispatcher with the event
+   * the chat is setting up with now, ADR 0355), the workspace being set up
+   * as it stands, with the setup's network and secrets for a command
+   * `in: "setup"`. In a kept sandbox whose Environment's setup has a
+   * network of its own, such a command asks for a new sandbox and waits for
+   * it ({@link SetupSandboxPendingError}), as do that setup's other
+   * commands meanwhile. From any other run, the workspace a person would
+   * reach, started as its next turn would start it; access is the caller's
+   * to have settled.
    */
   async commandWorkspace(input: {
     tenantId: string;
     projectId: string;
     sessionId: string;
-    /** The calling run's setup stamp, when Work started it as a setup. */
+    /** The setup event the calling run was started by, if one. */
     setupFor: SetupRunFact | null;
     in: "session" | "setup";
     start: boolean;
@@ -13271,10 +13809,10 @@ export class AgentSessionsService {
     caller?: Identity;
   }): Promise<{
     handle: SessionWorkspaceHandle;
-    /** Present for the chat's own setup run. */
+    /** Present for a run of the chat's setup event. */
     setup?: {
-      /** The build it sets up, and when the setup's time is up. */
-      build: string;
+      /** The event it was started by, and when the setup's time is up. */
+      event: string;
       deadline: string;
       /** The secrets `setup.secrets` names, for a command `in: "setup"`. */
       env: Record<string, string>;
@@ -13289,15 +13827,11 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!session) throw new AgentSessionNotFoundError(input.sessionId);
     const setupRun = parseSetupRun(session.setup_run);
-    const fromSetup = isCurrentSetupRun({
-      sessionId: session.id,
-      setupRun,
-      run: input.setupFor,
-    });
-    if (!fromSetup) {
+    const fromSetup = isCurrentSetupRun({ setupRun, run: input.setupFor });
+    if (!fromSetup || !setupRun) {
       if (input.in === "setup")
         throw new Error(
-          'A command runs `in: "setup"` only from the chat\'s setup workflow while Work sets its workspace up: a sandbox in use is never given the setup\'s network (ADR 0257). Run it `in: "session"`, or move the workspace so setup runs again.',
+          `A command runs \`in: "setup"\` only from a run the chat's setup event started (a project workflow bound to ${WORKSPACE_SETUP_EVENT}) while Work sets its workspace up: a sandbox in use is never given the setup's network (ADR 0257). Run it \`in: "session"\`, or move the workspace so setup runs again.`,
         );
       // Whom a person's workspace is for decides (ADR 0209): the caller.
       const identity = input.caller ?? (await this.ownerOf(session));
@@ -13310,6 +13844,22 @@ export class AgentSessionsService {
           start: input.start,
         }),
       };
+    }
+    // A kept sandbox is never given the setup's network (ADR 0257): a
+    // command that asks for it has this preparation make a new one (ADR
+    // 0355), and the setup's commands start there once it is ready.
+    if (input.start && setupRun.kept) {
+      if (input.in === "setup" && !setupRun.requested)
+        await this.db
+          .updateTable("agent_sessions")
+          .set({
+            setup_run: sql<Json>`jsonb_set(setup_run, '{requested}', 'true'::jsonb)`,
+          })
+          .where("id", "=", session.id)
+          .where(sql<boolean>`setup_run->>'event' = ${setupRun.event}`)
+          .execute();
+      if (input.in === "setup" || setupRun.requested)
+        throw new SetupSandboxPendingError();
     }
     const owner = await this.ownerOf(session);
     if (!owner) throw new AccessDeniedError();
@@ -13330,8 +13880,7 @@ export class AgentSessionsService {
       allocation,
       start: false,
     });
-    if (!setupRun) throw new AccessDeniedError();
-    const setup = { build: setupRun.build, deadline: setupRun.deadline };
+    const setup = { event: setupRun.event, deadline: setupRun.deadline };
     if (input.in !== "setup") return { handle, setup: { ...setup, env: {} } };
     // The secrets the setup names, and its own network (ADR 0257).
     const agent = await this.resolveAgent(session.agent_id, input.projectId);

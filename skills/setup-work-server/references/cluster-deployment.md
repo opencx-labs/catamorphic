@@ -361,9 +361,9 @@ fresh one with an empty disk at any time.
    runtime, or syncs a company project, under a claim in Postgres. A deploy
    applies on every replica at once: roles and program reads follow the
    published commit. Following workflow enablements move to each published
-   revision one project at a time, after the project's deploy workflow, under
-   a per-project claim, so no two replicas move one twice or out of order
-   (ADRs 0330, 0331).
+   revision one project at a time, after the project's deploy workflows
+   (the ones that bind `project.deploy`), under a per-project claim, so no
+   two replicas move one twice or out of order (ADRs 0330, 0331, 0355).
 
 A restarted worker process connects under a new epoch. The operations it had
 in flight fail as uncertain and are never replayed; its sandboxes and chats
@@ -810,7 +810,9 @@ caches (ADR 0208):
   new workspace before its first turn, once the chat's secrets and the
   member's personal files are in place, again when the command changes,
   and again when the workspace's base moves (a review chat reset to each
-  push). A workspace rebuilt after idle release runs it again. Its first
+  push), unless a project workflow listens for the setup event: then a
+  sandbox that already set up is kept and the workflow decides (below). A
+  workspace rebuilt after idle release runs it again. Its first
   failing command stops it. Output is appended to `.work-session/setup.log`
   beside the project, and the chat shows that the workspace is being set
   up. A failure, or a run longer than `setup.timeoutMinutes` (30 by
@@ -820,8 +822,8 @@ caches (ADR 0208):
   stands on; `WORK_PREVIOUS_BASE` is the commit this sandbox's last setup
   ran on, unset when the sandbox has not set up yet; `WORK_SETUP_REASON` is
   `created` (a new workspace), `rebuilt` (made again, as after idle
-  release), `base-moved` or `changed` (the command or its workflow
-  changed), the reason a setup workflow is given. A setup on its own
+  release), `base-moved` or `changed` (the command changed), the reason
+  the setup event carries. A setup on its own
   network (below) reads them too. An install that takes minutes can skip
   what did not change, such as `[ -n "${WORK_PREVIOUS_BASE:-}" ] && git
   diff --quiet "$WORK_PREVIOUS_BASE" "$WORK_BASE" -- pnpm-lock.yaml ||
@@ -839,7 +841,9 @@ caches (ADR 0208):
   workspace's base commit alone, with no grant, gateway variable or other
   secret, widened to those hosts (not even the gateway), and narrowed again
   before the session's work, grants, secrets and files arrive; a setup that
-  must run again gets a new sandbox in the same Allocation. Every chat's
+  must run again gets a new sandbox in the same Allocation, at once where
+  no workflow listens for the setup event, and when a run asks where one
+  does (below). Every chat's
   workspace stands on a commit (the ref a delivery gave it with
   `workspace: { ref }`, else the repository's default branch), so every
   chat runs it; a chat whose sandbox holds its owner's sign-in from the
@@ -873,16 +877,66 @@ caches (ADR 0208):
   Claude Code loads no settings files there; an ACP agent needs
   `"acp": { "shell": true, "projectConfig": false }` in its definition,
   which OpenCode cannot honestly state.
-- `setup.workflow` names a project workflow Work runs after `setup.command`,
-  at the same points, before the turn (ADR 0324): `"setup": { "command":
-  "pnpm install --frozen-lockfile", "workflow": "prepareReview" }`, or a
-  workflow alone. Enable it for the project as a project automation; it
-  runs with the connections and permissions consented there, and one no one
-  enabled fails the setup. It typically calls `exec` to run commands in the
-  workspace being set up: `in: "setup"` on the setup's network as above,
-  `in: "session"` on the chat's own. `$WORK_PROGRAM` names a read-only copy
-  of the run's `.work/` folder for trusted files. A failure or timeout is a
-  failed setup. Chats in folders on people's computers do not run it.
+- A project workflow sets workspaces up by binding the setup event in its
+  own source (ADR 0355): `triggers: [trigger("session.workspace-setup",
+  {})]`, with `where` to narrow it, such as `{ where: { payload: { session:
+  { key: { $prefix: "pr-" } } } } }`, enabled as a project automation.
+  `setup.workflow` was removed. An Environment names no workflow, a manifest
+  that still has the field is invalid and says to bind the trigger, and
+  `setup` takes `command`, `timeoutMinutes`, `network` and `secrets`, with
+  or without a command. Work records the event where setup is due, after
+  `setup.command` where it ran one, and the turn waits for every run the
+  event starts for a project automation, within `setup.timeoutMinutes`.
+  Several listening workflows all run, and the turn goes on when all have
+  ended. A run that fails or is canceled, a listener that could not start,
+  or the deadline (runs still going are canceled) is a failed setup: the
+  agent is told, the turn goes on, and setup is asked again before the next
+  turn. The event's `input.payload.detail` has `reason`, `environment`,
+  `workspace: { ref, commit }`, `previous: { commit } | null` (the base
+  this sandbox last set up on) and `sandbox`. A workflow decides by the
+  operations it calls, never by what it returns. `exec` with `in: "setup"`
+  runs on the setup's network as above and is accepted only from a run the
+  chat's setup event started; `in: "session"` runs on the chat's own.
+  `$WORK_PROGRAM` names a read-only copy of the run's `.work/` folder for
+  trusted files; `cp` keeps that mode, so `cp -f` replaces an earlier copy.
+  A member's own automation may bind the event, but the turn never waits
+  for it and it may not run commands `in: "setup"`. A project automation
+  hears a member's own chat only when it declares `sessions:write`; the
+  project's own chats need nothing extra. Chats in folders on people's
+  computers record no setup event. The attempt's `setup.workflow` phase
+  (ADR 0354) is the time the turn waited for the event's runs.
+- `sandbox` in that event says what Work did. `"new"`: the sandbox has not
+  set up before (Work made it for this turn, or its earlier setup failed),
+  and Work ran `setup.command` in it first. `"kept"`: the
+  chat already set this sandbox up, and setup is due because the base moved
+  or the command changed. Work replaced nothing and did not run
+  `setup.command` again; it moved the checkout to the new base in place
+  (Git sends what it lacks, and ignored files such as installed packages
+  stay). A sandbox is not kept while another session's turn runs in the
+  workspace: it is replaced as before. If a run then calls `exec` with `in: "setup"` and the setup has a
+  network of its own, Work makes a new sandbox at that point (same
+  Allocation, base checked out, `setup.command` run in it on that network)
+  and runs the command there. Later `in: "setup"` calls of the same setup
+  use it, and the chat's saved work and credentials arrive after. What a
+  run did in the kept sandbox before asking is lost with it, so network
+  work goes first. If no run asks, the sandbox, its checkout and what setup
+  installed stay, and setup is recorded done for the new base. `in:
+  "session"` never asks for a new sandbox, and without a setup network
+  `in: "setup"` runs in place. To decide,
+  `host["catamorphic.sessions"].changedPaths({ sessionId, from, to })`
+  answers `{ paths, truncated, complete }` from the session's copy on the
+  control plane: at most 2000 paths, and `complete: false` with no paths
+  when the copy lacks a commit, to be read as "everything may have
+  changed". A workflow compares `previous.commit` with `workspace.commit`
+  and asks only when a lockfile changed. The `session-workflows` skill and
+  the `pull-request-reviews` pack's skill each hold a worked example.
+- This changed what a push costs. Where a workflow listens, a push no
+  longer reruns `setup.command` by itself in a sandbox that already set up:
+  the workflow asks for the setup's network to have it run again. Where
+  nobody listens, nothing changed: every push replaces the sandbox of an
+  Environment whose setup has a network and reruns the command. A kept
+  sandbox reviews a later revision where an earlier revision already ran
+  code. That is the workflow's choice, and there is no other switch.
 - `volumes` name directories kept on the machine for each owner (a member,
   or the project for its own chats and runs) and project: the owner's next
   sandbox on that machine mounts the same directory, and nobody else's does.

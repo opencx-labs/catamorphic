@@ -165,7 +165,7 @@ their roles; a project chat may use any project Environment) and the agent's
    instead. The consent lists the declared permissions and store documents. Connecting an account may finish that initiated flow; connecting an
    account by itself never initiates it.
 
-## Following main, and the deploy workflow
+## Following main, and deploy workflows
 
 A project automation of \`main\` follows the published program by default
 (\`follow: true\`; set it when enabling, change it later with the enablement's
@@ -186,24 +186,66 @@ skipped. Runs already going keep the commit they started on. Temporary
 enablements never follow. Turn \`follow\` off to pin a workflow to a reviewed
 commit.
 
-A project that keeps its own data (a database reached through a secret) names a
-deploy workflow in \`.work/project.json\`:
+A project that keeps its own data (a database reached through a secret) has a
+deploy workflow: one that binds the \`project.deploy\` trigger in its own source.
+No configuration names it. \`deploy\` was removed from \`.work/project.json\`, and
+a revision whose manifest still has it does not go live and says to bind the
+trigger.
 
-\`\`\`json
-{ "deploy": { "workflow": "migrateDatabase" } }
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, type TriggerPayload, trigger } from "@catamorphic/workflow";
+
+/** @displayname Migrate the database */
+export const migrateDatabase = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("project.deploy")],
+  steps: [
+    /** @displayname Apply migrations */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<TriggerPayload<"project.deploy">>) => {
+        const { commit, previousCommit } = input.payload.detail;
+        return applyMigrations({ commit, previousCommit });
+      },
+    }),
+  ],
+}));
+
+/**
+ * @displayname Apply Migrations
+ * @icon database
+ * @param commit - @displayname Revision | @description The published commit about to go live
+ * @param previousCommit - @displayname Previous Revision | @description The commit that was live before it, if any
+ */
+async function applyMigrations({ commit, previousCommit }: { commit: string; previousCommit: string | null }) {
+  "use step";
+  // Run the project's migrations with any tool, each one idempotent.
+  return { commit, previousCommit };
+}
 \`\`\`
 
-Before following enablements move to a revision, Work runs that exported workflow
-once at the new revision with \`{ commit, previousCommit }\` and waits for it.
-It runs through its own project automation, so turn it on for **The project**
-with the connections and secrets it needs. If it fails, nothing moves, the
-previous revision stays live, the people who manage project automations are told,
-and the next published revision runs its own deploy. Someone with
-\`automations:write\` can also try the failed revision again (the project's
-\`published-revisions/retry\`), and Work tries it once more by itself when the
-deploy workflow's project automation is consented to again. One deploy runs per project at
-a time, in publication order. What it does is up to the project: run migrations
-with any tool, or nothing.
+Before following enablements move to a revision, Work records one
+\`project.deploy\` event for it and waits for the runs it starts.
+\`input.payload.detail\` has \`commit\` (the revision) and \`previousCommit\` (the
+one that was live before it, or null); \`input.id\` is the event's id, good for
+idempotency keys. Who listens is read at the new revision: every workflow that
+binds the trigger there and is turned on for **The project**, so turn the
+workflow on with the connections and secrets it needs. A workflow nobody turned
+on for the project does not listen, and neither does a member's own automation.
+With no listener there is no deploy step. Several listeners all run, each in a
+run of its own, and the revision goes live only once all of them succeeded.
+
+Each run executes the workflow as the new revision declares it, under the
+authority its project automation was turned on with. A revision that changes
+what a listening workflow may use or what starts it (adding this trigger to a
+workflow already turned on counts) fails the deploy and says so, before any
+listener's run starts: consent to the update, and Work tries the revision again
+once by itself. If a run fails, is
+canceled or runs past the deploy's time, nothing moves, the previous revision
+stays live, the people who manage project automations are told why, and the
+next published revision runs its own deploy. Someone with \`automations:write\`
+can also try the failed revision again (the project's
+\`published-revisions/retry\`). One deploy runs per project at a time, in
+publication order. What a deploy workflow does is up to the project: run
+migrations with any tool, or nothing.
 
 Write migrations expand then contract: runs on the previous commit keep running
 against the new schema while they finish, including long pauses. A revision adds

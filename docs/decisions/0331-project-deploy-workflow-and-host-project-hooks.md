@@ -1,6 +1,6 @@
 # 0331 — A project deploy workflow, and host project hooks that return secrets
 
-- **Status:** Accepted (amends 0046; builds on 0206, 0330)
+- **Status:** Accepted (amends 0046; builds on 0206, 0330; amended by [0355](0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md): the manifest names no deploy workflow. Workflows bind the `project.deploy` trigger in their source, every project automation bound at the revision runs, all must succeed, and none means no deploy step; the rest stands)
 - **Date:** 2026-11-17
 
 ## Context

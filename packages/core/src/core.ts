@@ -18,6 +18,7 @@ import {
   intersectProjectPermissions,
   intersectScope,
   mayUseProject,
+  PROJECT_PRINCIPAL_ID,
 } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
 import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
@@ -157,7 +158,6 @@ import { SessionTerminalsService } from "./services/session-terminals-service.js
 import { SessionWaitsService } from "./services/session-waits-service.js";
 import { SessionWorkspaces } from "./services/session-workspaces.js";
 import { REQUEST_OPENED_EVENT } from "./services/sessions/request-events.js";
-import { runSetupWorkflow } from "./services/setup-workflow-runner.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
 import type {
@@ -170,10 +170,15 @@ import {
   UserNotificationsService,
   type UserNotificationTransport,
 } from "./services/user-notifications-service.js";
+import { WaitedEventsService } from "./services/waited-events.js";
 import { WatchersService } from "./services/watchers-service.js";
 import { WebhooksService } from "./services/webhooks-service.js";
 import { WorkWakeups } from "./services/work-wakeups.js";
-import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
+import {
+  FOLLOW_ACTOR,
+  PUBLISHED_BRANCH,
+  WorkflowEnablementsService,
+} from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 import { WorkspaceCheckoutsService } from "./services/workspace-checkouts.js";
 
@@ -480,6 +485,8 @@ export class CatamorphicCore {
   readonly workflowEnablements: WorkflowEnablementsService;
   /** Published revisions going live in order (ADRs 0330, 0331). */
   readonly publishedRevisions: PublishedRevisionsService;
+  /** Events whose emitter waits for the runs they start (ADR 0355). */
+  readonly waitedEvents: WaitedEventsService;
   readonly schedules: SchedulesService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
@@ -1417,10 +1424,37 @@ export class CatamorphicCore {
     );
     this.roles = new RolesService(this.db, this.projectManager);
     this.memberships = new MembershipsService(this.db, this.roles);
+    // An event whose emitter waits for the runs it starts (ADR 0355): a
+    // workspace's setup, a revision's deploy.
+    this.waitedEvents = new WaitedEventsService({
+      db: this.db,
+      triggers: this.triggers,
+      cancelRun: async ({ tenantId, runId, reason }) => {
+        await coordinator.cancel({
+          identity: { tenantId, externalUserId: PROJECT_PRINCIPAL_ID },
+          runId,
+          reason,
+        });
+      },
+      wakeups: this.wakeups,
+    });
+    const waitedEvents = this.waitedEvents;
     this.publishedRevisions = new PublishedRevisionsService({
       db: this.db,
       enablements: this.workflowEnablements,
       runs: () => this.runs,
+      // A deploy is delivered at the revision it publishes: its bindings
+      // are read there, on the published branch.
+      boundWorkflows: ({ tenantId, projectId, commitSha, kind, payload }) =>
+        this.triggers.workflowsBoundAtCommit({
+          identity: { tenantId, externalUserId: FOLLOW_ACTOR },
+          projectId,
+          commitSha,
+          remoteBranch: PUBLISHED_BRANCH,
+          kind,
+          payload,
+        }),
+      recordEvent: (input) => waitedEvents.record(input),
       readManifest: async ({ tenantId, projectId, commitSha }) => {
         const repo = await this.projectManager.openPublished({
           tenantId,
@@ -1612,6 +1646,7 @@ export class CatamorphicCore {
               enablement: undefined,
               resolveMember: this.resolveMember,
             }),
+          projectManager: this.projectManager,
         },
       );
       this.sessionTerminals = new SessionTerminalsService({
@@ -1623,16 +1658,11 @@ export class CatamorphicCore {
         sessions: this.agentSessions,
         projectManager: this.projectManager,
       });
-      // Setup workflows run through their project enablement (ADR 0324).
+      // A workspace's setup is an event project workflows bind (ADR
+      // 0355): the turn waits for the runs it starts.
       const sessionExec = this.sessionExec;
-      this.agentSessions.setSetupWorkflowRunner({
-        run: (input) =>
-          runSetupWorkflow({
-            db: this.db,
-            runs: this.runs,
-            coordinator,
-            ...input,
-          }),
+      this.agentSessions.setSetupHooks({
+        events: this.waitedEvents,
         end: (input) => sessionExec.endSetup(input),
       });
       this.sessionPreviews = new SessionPreviewsService({

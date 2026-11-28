@@ -28,6 +28,7 @@ import {
   isCurrentSetupRun,
   parseSetupRun,
   type SetupRunFact,
+  SetupSandboxPendingError,
 } from "./agent-sessions-service.js";
 import {
   ChatAudienceSchema,
@@ -38,6 +39,7 @@ import type { HostCallFollowOutcome } from "./host-call-waits.js";
 import { HostCallParkedError } from "./host-call-waits.js";
 import { outOfDiskFor, withOutOfDisk } from "./out-of-disk.js";
 import { withProgram } from "./program-reader.js";
+import { ReplicaClaimBusyError, withReplicaClaim } from "./replica-claims.js";
 import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
 import {
   actionKey,
@@ -78,10 +80,18 @@ const DEFAULT_TIMEOUT_SECONDS = 600;
 const MAX_TIMEOUT_SECONDS = 14_400;
 /** How long past its own timeout a command's network may stay wide. */
 const WIDENING_GRACE_MS = 60_000;
+/**
+ * How long the network lock is held without a renewal before another
+ * replica may take it, and how long a start or an end waits for it.
+ */
+const NETWORK_LOCK_SECONDS = 60;
+const NETWORK_LOCK_WAIT_MS = 5 * 60_000;
 /** A start that left no process behind this long ago did not happen. */
 const STALE_START_MS = 5 * 60_000;
 /** How soon a command waiting for its workspace looks again. */
 const WORKSPACE_RETRY_MS = 5_000;
+/** How soon one waiting for its setup's new sandbox does (ADR 0355). */
+const SETUP_SANDBOX_RETRY_MS = 1_000;
 /** Time left in the boundary attempt for recording what was followed. */
 const ATTEMPT_MARGIN_MS = 20_000;
 
@@ -148,8 +158,8 @@ interface ExecProgress {
   /** When it is stopped: its timeout, or its setup's time (ADR 0324). */
   deadlineAt?: string;
   in?: "session" | "setup";
-  /** The setup build whose run started it; that run's end stops it. */
-  build?: string;
+  /** The setup event whose run started it; that setup's end stops it. */
+  event?: string;
   /** The widening of a command `in: "setup"` (ADR 0257). */
   widening?: string;
   /** The program commit its `$WORK_PROGRAM` copy is of, kept while it runs. */
@@ -227,21 +237,16 @@ export class SessionExecService {
           .where("project_id", "=", input.projectId)
           .executeTakeFirst();
         if (!session) throw new SessionKeyNotFoundError(parsed.key ?? "");
-        const run = await this.deps.db
-          .selectFrom("workflow_runs")
-          .select(["setup_session_id", "setup_build"])
-          .where("id", "=", input.runId)
-          .executeTakeFirstOrThrow();
-        // Only a run Work stamped as this chat's setup, for the workspace
-        // build in progress, is its setup run: never a caller's label.
+        // Only a run the dispatcher stamped with the event this chat is
+        // setting up with now is one of its setup's runs (ADR 0355): never
+        // a caller's label.
         const fromSetup = isCurrentSetupRun({
-          sessionId,
           setupRun: parseSetupRun(session.setup_run),
-          run: setupFact(run),
+          run: await this.setupFactOfRun(input.runId),
         });
         // Whom a person's terminal is for (ADR 0209): a project chat for
         // project automations holding sessions:write, a member's chat for
-        // that member's workflows. A chat's own setup run reaches it.
+        // that member's workflows. A run of the chat's setup reaches it.
         if (!fromSetup)
           assertSessionWorkspaceAccess({
             identity: input.caller,
@@ -357,25 +362,24 @@ export class SessionExecService {
     const timeoutMs = (args.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
     const progress = parseProgress(action.progress);
     if (!progress || (progress.phase === "starting" && isStale(progress))) {
-      // Waiting for the workspace counts against the command's timeout.
-      if (Date.now() - action.created_at.getTime() > timeoutMs)
-        return this.fail({
-          action,
-          error:
-            "The chat's workspace did not start within the command's timeout",
-        });
       const started = await this.start({
         action,
         args,
         timeoutMs,
         claimed: progress,
       }).catch(async (error: unknown) => {
-        // Starting, or waiting for a machine (ADR 0258): tried again each
-        // slice, within the command's own timeout.
+        // The setup's new sandbox is being made (ADR 0355): tried again
+        // shortly, within the setup's time rather than the command's.
+        if (error instanceof SetupSandboxPendingError)
+          return this.unclaim(action).then(() => "replacing" as const);
+        // Starting, waiting for a machine (ADR 0258), or behind another
+        // command's network change for longer than a start waits: tried
+        // again each slice, within the command's own timeout.
         if (
           (error instanceof SessionWorkspaceUnavailableError &&
             error.reason === "starting") ||
-          error instanceof EnvironmentCapacityError
+          error instanceof EnvironmentCapacityError ||
+          error instanceof ReplicaClaimBusyError
         )
           return this.unclaim(action).then(() => "waiting" as const);
         return this.fail({
@@ -383,9 +387,18 @@ export class SessionExecService {
           error: error instanceof Error ? error.message : String(error),
         });
       });
-      // Waiting for the workspace: look again in a few seconds.
+      if (started === "replacing")
+        return { status: "pending", retryAfterMs: SETUP_SANDBOX_RETRY_MS };
+      // Waiting for the workspace: look again in a few seconds. That wait
+      // counts against the command's timeout.
       if (started === "waiting")
-        return { status: "pending", retryAfterMs: WORKSPACE_RETRY_MS };
+        return Date.now() - action.created_at.getTime() > timeoutMs
+          ? this.fail({
+              action,
+              error:
+                "The chat's workspace did not start within the command's timeout",
+            })
+          : { status: "pending", retryAfterMs: WORKSPACE_RETRY_MS };
       if (started === "lost") return { status: "pending" };
       if ("status" in started) return started;
       return this.followRunning({ action, args, timeoutMs, ...started, input });
@@ -454,7 +467,7 @@ export class SessionExecService {
       sandboxId: handle.sandboxId,
       in: args.in,
       deadlineAt: new Date(deadline).toISOString(),
-      ...(setup ? { build: setup.build } : {}),
+      ...(setup ? { event: setup.event } : {}),
     };
     // A start that stopped after its process began, on this replica or
     // another, left that process or its exit behind: adopt it.
@@ -512,36 +525,40 @@ export class SessionExecService {
     // sandbox another's widening holds, nor widens one a session command
     // runs in, and a narrowing waits for the last widening.
     const shared = await this.workspaceOf(action);
-    return this.withNetworkLock(shared.key, async (trx) => {
-      const running = await runningExecs(trx, {
+    const db = this.deps.db;
+    return this.withNetworkLock(shared.key, async () => {
+      const running = await runningExecs(db, {
         sessionIds: shared.sessionIds,
         except: action.id,
         sandboxId: handle.sandboxId,
       });
-      // A command of a setup run starts only while that setup is the
+      // A command of a setup's run starts only while that setup is the
       // chat's current one: one that ended, or ran out of time, already
       // stopped its commands and narrowed the sandbox (ADR 0324).
       if (setup) {
-        const chat = await trx
+        const chat = await db
           .selectFrom("agent_sessions")
           .select("setup_run")
           .where("id", "=", action.session_id)
           .executeTakeFirst();
         const live = parseSetupRun(chat?.setup_run ?? null);
         if (
-          live?.build !== setup.build ||
+          live?.event !== setup.event ||
           Date.parse(live.deadline) <= Date.now()
         )
           throw new SessionExecRefusedError(
             "The setup ended before the command started",
           );
+        // Its sandbox is being made again since this start reached it
+        // (ADR 0355): it starts in the new one.
+        if (live.kept && live.requested) throw new SetupSandboxPendingError();
       }
       // Nor while the Environment's own setup has it on the setup's
-      // network (ADR 0257), unless it is that setup's own workflow.
+      // network (ADR 0257), unless it is a run of that setup's own event.
       if (
         args.in === "session" &&
         (running.some((other) => other.widening) ||
-          (!setup && (await setupWidened(trx, shared.key))))
+          (!setup && (await setupWidened(db, shared.key))))
       )
         throw new SessionExecRefusedError(
           "The chat's workspace is on its setup's network for a setup command; a command in the session runs once it is narrow again",
@@ -550,7 +567,7 @@ export class SessionExecService {
         throw new SessionExecRefusedError(
           "A command in the session is running in this workspace, so it cannot be given the setup's network",
         );
-      const current = await trx
+      const current = await db
         .selectFrom("session_actions")
         .select("progress")
         .where("id", "=", action.id)
@@ -578,7 +595,7 @@ export class SessionExecService {
         ...(widening ? { widening } : {}),
         ...(commit ? { program: commit } : {}),
       };
-      await trx
+      await db
         .updateTable("session_actions")
         .set({ progress: progressJson(progress), updated_at: new Date() })
         .where("id", "=", action.id)
@@ -644,19 +661,26 @@ export class SessionExecService {
   }
 
   /**
-   * Run `work` holding the workspace's network lock (a transaction-scoped
-   * advisory lock), so widenings, narrowings and starts in one sandbox
-   * happen one at a time on every replica.
+   * Run `work` holding the workspace's network lock, so widenings,
+   * narrowings and starts in one sandbox happen one at a time on every
+   * replica. It is a claim in Postgres (ADR 0193), renewed while the work
+   * runs, and not a transaction: what it guards talks to the machine, and a
+   * worker's operations travel through the database, which a
+   * single-connection one (PGlite) cannot answer while a transaction is
+   * open. One that stays held past the wait fails the caller, which tries
+   * again.
    */
   private withNetworkLock<T>(
     workspaceSessionId: string,
-    work: (trx: Transaction<DB>) => Promise<T>,
+    work: () => Promise<T>,
   ): Promise<T> {
-    return this.deps.db.transaction().execute(async (trx) => {
-      await sql`select pg_advisory_xact_lock(hashtext(${`work-exec-network:${workspaceSessionId}`}))`.execute(
-        trx,
-      );
-      return work(trx);
+    return withReplicaClaim({
+      db: this.deps.db,
+      name: `work-exec-network:${workspaceSessionId}`,
+      ttlSeconds: NETWORK_LOCK_SECONDS,
+      waitMs: NETWORK_LOCK_WAIT_MS,
+      pollMs: 50,
+      operation: () => work(),
     });
   }
 
@@ -817,16 +841,17 @@ export class SessionExecService {
   }
 
   /**
-   * After a chat's setup run ended however it ended (ADR 0324): every
-   * command it started is stopped and recorded, and a sandbox it widened
-   * is narrowed, failing closed: a sandbox that cannot be narrowed is
-   * stopped and this throws, so preparation never goes on with it wide.
+   * After the runs of a chat's setup event ended however they ended (ADRs
+   * 0324, 0355): every command they started is stopped and recorded, and a
+   * sandbox they widened is narrowed, failing closed: a sandbox that cannot
+   * be narrowed is stopped and this throws, so preparation never goes on
+   * with it wide.
    */
   async endSetup(input: {
     tenantId: string;
     projectId: string;
     sessionId: string;
-    build: string;
+    event: string;
     network: boolean;
   }): Promise<void> {
     // The setup is no longer the chat's current one, so no command of it
@@ -842,7 +867,7 @@ export class SessionExecService {
       .where("session_id", "=", input.sessionId)
       .where("operation", "=", "exec")
       .where("status", "in", ["pending", "running"])
-      .where(sql<boolean>`progress->>'build' = ${input.build}`)
+      .where(sql<boolean>`progress->>'event' = ${input.event}`)
       .execute();
     for (const action of actions) {
       const progress = parseProgress(action.progress);
@@ -1002,13 +1027,14 @@ export class SessionExecService {
   }): Promise<void> {
     const { action, progress } = args;
     const shared = await this.workspaceOf(action);
-    await this.withNetworkLock(shared.key, async (trx) => {
-      await trx
+    const db = this.deps.db;
+    await this.withNetworkLock(shared.key, async () => {
+      await db
         .updateTable("session_actions")
         .set({ progress: sql<Json>`progress - 'widening'` })
         .where("id", "=", action.id)
         .execute();
-      const others = await runningExecs(trx, {
+      const others = await runningExecs(db, {
         sessionIds: shared.sessionIds,
         except: action.id,
         ...(progress.sandboxId ? { sandboxId: progress.sandboxId } : {}),
@@ -1293,16 +1319,32 @@ export class SessionExecService {
     return identityOfRun({ ...row, external_user_id: row.external_user_id });
   }
 
-  /** The calling run's setup stamp, when Work started it as a setup. */
+  /** The setup event the calling run was started by, if one. */
   private async setupFactOf(action: ActionRow): Promise<SetupRunFact | null> {
     const runId = runIdOf(action);
-    if (!runId) return null;
+    return runId ? this.setupFactOfRun(runId) : null;
+  }
+
+  /**
+   * The Project Event a run was started by (ADR 0355), when it is a run of
+   * one of the project's own automations: the stamp only the dispatcher
+   * writes. A member's own automation hears a chat's setup event too, and
+   * never runs commands in that setup.
+   */
+  private async setupFactOfRun(runId: string): Promise<SetupRunFact | null> {
     const row = await this.deps.db
       .selectFrom("workflow_runs")
-      .select(["setup_session_id", "setup_build"])
-      .where("id", "=", runId)
+      .innerJoin(
+        "workflow_enablements as enablement",
+        "enablement.id",
+        "workflow_runs.workflow_enablement_id",
+      )
+      .select(["workflow_runs.event_id", "enablement.owner_kind"])
+      .where("workflow_runs.id", "=", runId)
       .executeTakeFirst();
-    return row ? setupFact(row) : null;
+    return row?.event_id && row.owner_kind === "project"
+      ? { event: row.event_id }
+      : null;
   }
 
   private async tenantOf(projectId: string): Promise<string> {
@@ -1453,7 +1495,7 @@ function parseProgress(value: Json | null): ExecProgress | null {
     ...(text("processId") ? { processId: text("processId") } : {}),
     ...(text("startedAt") ? { startedAt: text("startedAt") } : {}),
     ...(text("deadlineAt") ? { deadlineAt: text("deadlineAt") } : {}),
-    ...(text("build") ? { build: text("build") } : {}),
+    ...(text("event") ? { event: text("event") } : {}),
     ...(text("widening") ? { widening: text("widening") } : {}),
     ...(text("program") ? { program: text("program") } : {}),
     ...(value.in === "session" || value.in === "setup" ? { in: value.in } : {}),
@@ -1540,13 +1582,4 @@ function identityOfRun(row: {
         }
       : {}),
   };
-}
-
-function setupFact(row: {
-  setup_session_id: string | null;
-  setup_build: string | null;
-}): SetupRunFact | null {
-  return row.setup_session_id && row.setup_build
-    ? { sessionId: row.setup_session_id, build: row.setup_build }
-    : null;
 }

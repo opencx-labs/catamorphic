@@ -40,8 +40,60 @@ const config = z.strictObject({
   /** session.result-recorded: only results of these names (ADR 0323). */
   names: z.array(z.string()).min(1).optional(),
 });
-/** Domain events are emitted by core on both hosts, transactionally with state. */
-export const SESSION_TRIGGER_KINDS = [
+/**
+ * What `session.workspace-setup` says of a setup (ADR 0355), typed so a
+ * workflow reads `previous.commit` without checking what it is.
+ */
+const workspaceSetupPayload = sessionEventPayload.extend({
+  payload: sessionEventPayload.shape.payload.extend({
+    detail: z.object({
+      /** Why the workspace is set up. */
+      reason: z.enum(["created", "rebuilt", "base-moved", "changed"]),
+      /** The Environment's name. */
+      environment: z.string(),
+      /** The base the workspace stands on. */
+      workspace: z.object({ ref: z.string(), commit: z.string() }),
+      /** The base this sandbox last set up on; null when it never did. */
+      previous: z.object({ commit: z.string() }).nullable(),
+      /** `kept`: it set up before, and Work replaced and ran nothing. */
+      sandbox: z.enum(["new", "kept"]),
+    }),
+  }),
+});
+
+/**
+ * A chat's workspace is being set up (ADR 0355): the one session event its
+ * turn waits for. `statuses` in config selects reasons.
+ */
+const WORKSPACE_SETUP_KIND = defineTriggerKind({
+  name: "session.workspace-setup",
+  modes: ["async"],
+  display: { label: "workspace setup", icon: "messages-square" },
+  description:
+    'A chat\'s workspace is being set up, and its turn waits for this workflow: every run this event starts for a project automation must end before the agent starts, within the Environment\'s setup.timeoutMinutes. input.payload.detail has reason (created, rebuilt, base-moved or changed; statuses in config selects reasons), environment, workspace { ref, commit }, previous { commit } (the base this sandbox last set up on, or null) and sandbox: "new" (not set up here before: Work made the sandbox, or its earlier setup failed, and ran the Environment\'s setup.command first) or "kept" (it set up before: Work replaced nothing and ran nothing, and only moved the checkout to the new base). Decide by calling operations, not by what the workflow returns: catamorphic.sessions.changedPaths compares previous.commit with workspace.commit, and catamorphic.sessions.exec with in: "setup" runs a command as setup does. In a kept sandbox whose setup has a network of its own, the first in: "setup" command has Work make a new sandbox (base checked out, setup.command run) and runs there, so ask for it before anything else; with none, the sandbox and what it installed stay. A failed run, or one past the deadline, is a failed setup: the agent is told and it runs again before the next turn. Narrow with where on payload.detail.environment or payload.session.key.',
+  payload: workspaceSetupPayload,
+  config,
+  deliveryKey: (event) => event.id,
+  matches: ({ config, payload: event }) =>
+    selectsSession({ config, payload: event }) &&
+    (!config.statuses || config.statuses.includes(event.payload.detail.reason)),
+});
+
+/** What every session kind's config selects: a chat, its agent, its work. */
+function selectsSession(input: {
+  config: z.output<typeof config>;
+  payload: z.output<typeof sessionEventPayload>;
+}): boolean {
+  const value = input.payload.payload;
+  return (
+    (!input.config.sessionId || input.config.sessionId === value.sessionId) &&
+    (!input.config.agentId || input.config.agentId === value.agentId) &&
+    (!input.config.workStatus ||
+      input.config.workStatus === value.session.workStatus)
+  );
+}
+
+const SESSION_EVENT_KINDS = [
   "session.created",
   "session.message-received",
   "session.message-sent",
@@ -83,10 +135,7 @@ export const SESSION_TRIGGER_KINDS = [
     matches: ({ config, payload: event }) => {
       const value = event.payload;
       return (
-        (!config.sessionId || config.sessionId === value.sessionId) &&
-        (!config.agentId || config.agentId === value.agentId) &&
-        (!config.workStatus ||
-          config.workStatus === value.session.workStatus) &&
+        selectsSession({ config, payload: event }) &&
         (!config.names || config.names.includes(String(value.detail.name))) &&
         (!config.statuses ||
           config.statuses.includes(
@@ -100,3 +149,9 @@ export const SESSION_TRIGGER_KINDS = [
     },
   }),
 );
+
+/** Domain events are emitted by core on both hosts, transactionally with state. */
+export const SESSION_TRIGGER_KINDS = [
+  ...SESSION_EVENT_KINDS,
+  WORKSPACE_SETUP_KIND,
+];

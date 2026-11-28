@@ -3,6 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-11-26
 - **Amends:** 0198, 0208, 0258, 0324, 0333
+- **Amended by:** [0355](0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md): `setup.timeoutMinutes` times the wait for the runs of the workspace's setup event, whose reason is the same one
 
 ## Context
 

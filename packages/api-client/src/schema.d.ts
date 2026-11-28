@@ -5127,9 +5127,13 @@ export interface paths {
                                 commitSha: string;
                                 /** @enum {string} */
                                 status: "pending" | "deploying" | "applying" | "applied" | "superseded" | "failed";
-                                deployWorkflow: string | null;
                                 /** Format: uuid */
-                                deployRunId: string | null;
+                                deployEventId: string | null;
+                                deployRuns: {
+                                    workflowName: string;
+                                    /** Format: uuid */
+                                    runId: string | null;
+                                }[];
                                 previousCommitSha: string | null;
                                 error: string | null;
                                 report: {
@@ -5216,9 +5220,13 @@ export interface paths {
                             commitSha: string;
                             /** @enum {string} */
                             status: "pending" | "deploying" | "applying" | "applied" | "superseded" | "failed";
-                            deployWorkflow: string | null;
                             /** Format: uuid */
-                            deployRunId: string | null;
+                            deployEventId: string | null;
+                            deployRuns: {
+                                workflowName: string;
+                                /** Format: uuid */
+                                runId: string | null;
+                            }[];
                             previousCommitSha: string | null;
                             error: string | null;
                             report: {

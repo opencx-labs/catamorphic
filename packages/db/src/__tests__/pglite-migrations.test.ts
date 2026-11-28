@@ -171,6 +171,7 @@ describe("PGlite migrations", () => {
       "095_machines_as_host_code.sql",
       "096_workspace_checkouts.sql",
       "097_attempt_phases.sql",
+      "098_waited_events.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -249,6 +250,7 @@ describe("PGlite migrations", () => {
         "095_machines_as_host_code.sql",
         "096_workspace_checkouts.sql",
         "097_attempt_phases.sql",
+        "098_waited_events.sql",
       ]);
       const columns = await sql<{ count: number }>`
         SELECT COUNT(*)::int AS count

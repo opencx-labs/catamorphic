@@ -11,7 +11,7 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { Identity } from "../identity.js";
+import { EVERY_ARTIFACT, type Identity } from "../identity.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
@@ -28,11 +28,13 @@ import {
   type SessionOperationName,
   SessionOperationsService,
   sessionOperationError,
+  sessionOperationHostName,
 } from "../services/session-operations.js";
 import {
   type SessionState,
   SessionStateSchema,
 } from "../services/session-state.js";
+import type { ChangedPaths } from "../services/sessions/changed-paths.js";
 import { requestFromRow } from "../services/sessions/session-rows.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -72,6 +74,7 @@ const unusedSandbox = new Proxy(
 
 describe("session operations", () => {
   let tmpDir: string;
+  let projectManager: ProjectManager;
   let sessions: AgentSessionsService;
   let operations: SessionOperationsService;
   let projectId: string;
@@ -84,7 +87,7 @@ describe("session operations", () => {
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-operations-"));
-    const projectManager = new ProjectManager(
+    projectManager = new ProjectManager(
       new FsBackend(path.join(tmpDir, "projects")),
     );
     const projects = new ProjectsService(db, projectManager);
@@ -134,6 +137,7 @@ describe("session operations", () => {
     operations = new SessionOperationsService(db, sessions, {
       watchers: () => undefined,
       chatOwner: async ({ caller }) => caller,
+      projectManager,
     });
     projectId = (await projects.create(identity, { name: "Operations" })).id;
   }, 30_000);
@@ -593,6 +597,112 @@ describe("session operations", () => {
         sessionOperationError,
       ),
     ).toMatchObject({ code: "not_found" });
+  }, 60_000);
+
+  it("answers the paths that differ between two commits of a chat to whoever may read it", async () => {
+    expect(SESSION_OPERATIONS.session_changed_paths).toMatchObject({
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      scope: "work:read",
+    });
+    expect(sessionOperationHostName("session_changed_paths")).toBe(
+      "changedPaths",
+    );
+    const chat = await settle(await start("compare two commits"));
+    // The copy of the chat's repository this host keeps, two commits on.
+    const copy = await projectManager.openSession({
+      tenantId: identity.tenantId,
+      projectId,
+      sessionId: chat.sessionId,
+    });
+    const author = { name: "Tester", email: "tester@work.example" };
+    await copy.writeFile("bun.lock", "lock 1\n");
+    await copy.writeFile("src/keep.ts", "export {};\n");
+    const from = await copy.commit("First", author);
+    await copy.writeFile("bun.lock", "lock 2\n");
+    await copy.writeFile("docs/my notes.md", "notes\n");
+    const to = await copy.commit("Second", author);
+    await copy.dispose();
+
+    const differs = {
+      paths: ["bun.lock", "docs/my notes.md"],
+      truncated: false,
+      complete: true,
+    };
+    const compare = { sessionId: chat.sessionId, from, to };
+    expect(await run<ChangedPaths>("session_changed_paths", compare)).toEqual(
+      differs,
+    );
+    // The chat is found by its id alone, on a server-wide connection too.
+    expect(
+      await run<ChangedPaths>("session_changed_paths", compare, false),
+    ).toEqual(differs);
+    expect(
+      await run<ChangedPaths>("session_changed_paths", {
+        ...compare,
+        to: from,
+      }),
+    ).toEqual({ paths: [], truncated: false, complete: true });
+    // A commit this copy does not hold: nothing was compared.
+    expect(
+      await run<ChangedPaths>("session_changed_paths", {
+        ...compare,
+        from: "0123456789abcdef0123456789abcdef01234567",
+      }),
+    ).toEqual({ paths: [], truncated: false, complete: false });
+    // A commit is named by its full id, never a ref.
+    for (const named of ["main", from.slice(0, 12), "--output=leaked.txt"])
+      expect(
+        await run("session_changed_paths", { ...compare, from: named }).catch(
+          sessionOperationError,
+        ),
+      ).toMatchObject({ code: "invalid_input" });
+
+    // A subsession that shares the chat's workspace reads the same copy
+    // (ADR 0322): it has none of its own.
+    const sharing = await settle(await start("works in the first chat's"));
+    await db
+      .updateTable("agent_sessions")
+      .set({ workspace_session_id: chat.sessionId })
+      .where("id", "=", sharing.sessionId)
+      .execute();
+    expect(
+      await run<ChangedPaths>("session_changed_paths", {
+        ...compare,
+        sessionId: sharing.sessionId,
+      }),
+    ).toEqual(differs);
+
+    // Mallory reaches the project's agents, not this member's chats.
+    const mallory: Identity = {
+      tenantId: identity.tenantId,
+      externalUserId: "mallory",
+      scope: [{ kind: "agent", projectId, name: EVERY_ARTIFACT }],
+    };
+    expect(
+      await operations
+        .execute({
+          identity: mallory,
+          projectId,
+          operation: "session_changed_paths",
+          args: compare,
+          author: { kind: "user", externalUserId: "mallory" },
+        })
+        .catch(sessionOperationError),
+    ).toMatchObject({ code: "not_authorized" });
+    expect(
+      await run("session_changed_paths", {
+        ...compare,
+        sessionId: randomUUID(),
+      }).catch(sessionOperationError),
+    ).toMatchObject({ code: "not_found" });
+    // A read: nothing is recorded as an action of the chat.
+    expect(
+      await db
+        .selectFrom("session_actions")
+        .select("id")
+        .where("operation", "=", "session_changed_paths")
+        .execute(),
+    ).toEqual([]);
   }, 60_000);
 
   it("waits on several chats with one cursor", async () => {

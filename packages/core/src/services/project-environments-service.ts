@@ -133,19 +133,25 @@ const CheckoutSchema = z.strictObject({
   timeoutMinutes: z.number().int().positive().max(240).optional(),
 });
 
-/** An Environment's workspace setup (ADRs 0208, 0257, 0324). */
+/**
+ * What a manifest that still names a setup workflow is told (ADR 0355): a
+ * workflow is never named in configuration.
+ */
+export const SETUP_WORKFLOW_REMOVED =
+  'setup.workflow was removed: a workflow is not named in configuration. Bind it to the trigger in its own source instead, trigger("session.workspace-setup", {}), and enable it for the project';
+
+/**
+ * An Environment's workspace setup (ADRs 0208, 0257): a command, how long
+ * it and the runs of its setup event may take, and the network and secrets
+ * both run with. A project workflow sets workspaces up by binding
+ * `session.workspace-setup` in its own source (ADR 0355), never by name
+ * here.
+ */
 const SetupSchema = z
   .strictObject({
     command: z.string().min(1).max(16_384).optional(),
-    /**
-     * A project workflow, by its exported name, run after `command` at the
-     * same points (ADR 0324), through its project enablement.
-     */
-    workflow: z
-      .string()
-      .max(200)
-      .regex(/^[A-Za-z_$][\w$]*$/, "workflow is a workflow's exported name")
-      .optional(),
+    /** Removed (ADR 0355); named only to say what to write instead. */
+    workflow: z.never({ error: SETUP_WORKFLOW_REMOVED }).optional(),
     timeoutMinutes: z.number().int().positive().max(240).optional(),
     /** The only hosts the setup reaches, while it runs (ADR 0257). */
     network: z.strictObject({ allow: EgressAllowSchema }).optional(),
@@ -155,9 +161,16 @@ const SetupSchema = z
      */
     secrets: z.array(z.string()).max(200).optional(),
   })
-  .refine((setup) => setup.command !== undefined || setup.workflow, {
-    message: "setup names a command, a workflow, or both",
-  });
+  .refine(
+    (setup) =>
+      setup.command !== undefined ||
+      setup.network !== undefined ||
+      setup.timeoutMinutes !== undefined,
+    {
+      message:
+        "setup names a command, a network of its own, or how long it may take",
+    },
+  );
 
 /**
  * A secret name an Environment may list or `project.json` may declare (ADR
@@ -566,15 +579,14 @@ export interface EnvironmentCheckout {
 /**
  * An Environment's workspace setup (ADR 0208): a shell command run in the
  * project folder of every new workspace, again when it changes or the
- * workspace's base moves, within `timeoutMinutes`, and after it a project
- * workflow (ADR 0324). With `network` (ADR
- * 0257) it reaches only those hosts while it runs, in a sandbox holding
- * the base checkout alone, with only the `secrets` it names.
+ * workspace's base moves, within `timeoutMinutes`. After it, the runs of
+ * the workspace's setup event (project workflows bound to
+ * `session.workspace-setup`, ADR 0355) have the same time. With `network`
+ * (ADR 0257) it reaches only those hosts while it runs, in a sandbox
+ * holding the base checkout alone, with only the `secrets` it names.
  */
 export interface EnvironmentSetup {
   command?: string;
-  /** A project workflow run after `command` (ADR 0324). */
-  workflow?: string;
   timeoutMinutes?: number;
   network?: { allow: readonly string[] };
   /** The Environment's secrets a setup with its own network runs with. */

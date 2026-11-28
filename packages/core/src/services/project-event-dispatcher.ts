@@ -48,6 +48,9 @@ export class ProjectEventDispatcher {
                 .onRef("event.received_at", ">=", "activation.created_at"),
             )
             .select(["activation.id", "event.id"])
+            // An event delivered at a published revision is its emitter's
+            // to deliver, at that revision (a deploy, ADR 0355).
+            .where("event.at_commit", "is", null)
             .where("activation.status", "=", "active")
             .where("enablement.status", "=", "active")
             .where(({ or, eb }) =>
@@ -219,6 +222,9 @@ export class ProjectEventDispatcher {
                       workflows: [row.workflow_name],
                       mode: "async",
                       deliveryKey,
+                      // The run is stamped with its event, and a waited
+                      // event's run is its own (ADR 0355).
+                      event: { id: row.id, waited: row.waited },
                     })
                   ).runs.map((run) => run.runId);
             await this.db

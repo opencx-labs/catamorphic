@@ -233,6 +233,24 @@ default; add `checkout.command` to the `review` Environment to take less,
 such as the cones the reviewer reads
 ([Setup and volumes](cluster-deployment.md#setup-and-volumes)).
 
+What a push costs is the project's to decide. As the pack ships, every push
+replaces the review sandbox and runs `setup.command` again: its setup has a
+network of its own, and none of its workflows listens for the setup event.
+To make a push that changes no lockfile cost a fetch instead, add a project
+workflow bound to `session.workspace-setup` (ADR 0355). Work then keeps the
+sandbox the chat already set up, moves its checkout to the new head in
+place, and waits for the workflow, which compares the two commits
+(`changedPaths`) and asks for the setup's network (`exec` with
+`in: "setup"`) only when a lockfile changed; asking gets a new sandbox and
+the command, as before. Two things change once such a workflow listens. A
+push no longer reruns `setup.command` by itself in a sandbox that already
+set up. And a kept sandbox reviews a later revision where an earlier
+revision already ran code, which is the workflow's choice. An Environment
+names no workflow for this: `setup.workflow` was removed, and a manifest
+that still has it is invalid. The pack's skill has the workflow ("Optional:
+a trusted procedure, and pushes during a review"), and
+[Setup and volumes](cluster-deployment.md#setup-and-volumes) the contract.
+
 ## 5. Turn it on
 
 Someone with `automations:write`, in a role whose `environments` list

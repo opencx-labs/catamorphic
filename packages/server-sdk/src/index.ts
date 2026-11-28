@@ -267,6 +267,7 @@ export {
   type PostgresConnectionProvider,
 } from "./postgres-connection-provider.js";
 export { PostgresObjectStore } from "./postgres-object-store.js";
+export { PROJECT_TRIGGER_KINDS } from "./project-trigger-kinds.js";
 export { schedule } from "./schedule-trigger-kind.js";
 export type {
   CodeHostsResource,

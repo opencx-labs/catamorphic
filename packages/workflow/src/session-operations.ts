@@ -359,6 +359,19 @@ export interface SessionExecResult {
    */
   outOfDisk?: string;
 }
+/** The paths that differ between two commits of a chat, as `changedPaths` answers. */
+export interface SessionChangedPaths {
+  /** Repository paths in Git's order: the first 2000 when more differ. */
+  paths: string[];
+  /** More than 2000 paths differ, so `paths` does not name them all. */
+  truncated: boolean;
+  /**
+   * False when the host's copy of the chat's repository does not hold one
+   * of the two commits: nothing was compared and `paths` is empty, so treat
+   * it as everything may have changed.
+   */
+  complete: boolean;
+}
 /** A message a start or a send delivered. */
 interface Sent {
   messageId: string;
@@ -457,6 +470,23 @@ export interface SessionHostOperations {
       order?: "newest" | "oldest";
     },
     SessionState
+  >;
+  /**
+   * The paths that differ between two commits of a chat, `from` and `to`
+   * by their full ids: every file added, modified or deleted, a moved file
+   * as both its old and its new path. The host reads them from its own copy
+   * of the chat's repository, so nothing runs in the workspace. At most
+   * 2000 paths come back, in Git's order; `truncated: true` says more
+   * differ. `complete: false` means that copy does not hold one of the two
+   * commits: nothing was compared, `paths` is empty, and everything may
+   * have changed. The same commit twice answers no paths. A setup workflow
+   * asks it for an event's `previous.commit` and `workspace.commit`, and
+   * installs again only when a lockfile is among the paths (or the answer
+   * is truncated or not complete).
+   */
+  changedPaths: Call<
+    Target & { from: string; to: string },
+    SessionChangedPaths
   >;
   /** Answer what an agent asked: a question's answers, or an approval. */
   answer: Call<
@@ -620,10 +650,16 @@ export interface SessionHostOperations {
    * checkout or `cwd` beneath it. `in: "session"` runs as the agent's
    * commands do, with the chat's network, grants and secrets, starting its
    * workspace if it has none. `in: "setup"` runs as the Environment's setup
-   * does, on the setup's network without grants or secrets, and only from
-   * the chat's setup workflow while its workspace is built. `$WORK_PROGRAM`
-   * names a read-only copy of this run's `.work/` folder at its deployed
-   * commit: copy trusted files from there. A command longer than the
+   * does, on the setup's network without grants or secrets, and only from a
+   * run the chat's setup event started (a project workflow bound to
+   * `session.workspace-setup`, ADR 0355) while its workspace is set up. In a
+   * sandbox the chat already used (`sandbox: "kept"`) whose setup has a
+   * network of its own, the first such command has Work make a new sandbox,
+   * run the Environment's `setup.command` in it, and run there: what ran in
+   * the kept one before is lost with it, so ask for the network first.
+   * `$WORK_PROGRAM` names a read-only copy of this run's `.work/` folder at
+   * its deployed commit: copy trusted files from there (`cp -f`, since a
+   * copy keeps being read-only). A command longer than the
    * boundary's attempt parks the run until it ends; a retry with the same
    * key answers with the same execution.
    */

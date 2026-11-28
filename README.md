@@ -71,11 +71,17 @@ titles and messages, showing a matching excerpt beside the pages and work opened
 in the profile. It searches user and assistant messages, excluding tool output
 and reasoning.
 
-Projects are ordinary folders and git repositories. Every agent turn that
-changes files creates a checkpoint commit, and any turn can be undone with
-its files. A session is a durable log of turns that every client folds the
-same way, so a turn whose machine stopped continues elsewhere on the agent's
-own conversation. Local execution uses an embedded
+Projects are ordinary folders, and Work uses Git where a folder is a
+repository; a plain folder you open stays plain until an operation needs
+Git. In a project Work created, and in a chat's own worktree, every agent
+turn that changes files creates a checkpoint commit; in a folder or
+repository you opened, Work commits nothing by itself. Undoing a turn undoes
+every later one too, and the files return in a workspace the chat owns or a
+folder nothing else changed. A session is a durable log of turns that every
+client folds the same way: when the server process that ran a turn stops,
+another picks the turn up where its sandbox survived, and otherwise the turn
+ends as interrupted and the chat continues on the agent's own conversation
+in a new turn. Local execution uses an embedded
 database and local sandboxes, so the desktop does not depend on a hosted
 Catamorphic service.
 
@@ -223,9 +229,11 @@ overwritten. (ADRs [0032](docs/decisions/0032-projects-are-bun-workspaces.md),
 
 ## Git-native work tracking
 
-Work is tracked without anyone performing git. Every agent turn that
-changed files ends in a **checkpoint commit**, its sha stamped on the chat
-message, so every reply's diff is addressable forever. Work never updates
+Work is tracked without anyone performing git. In a project Work created,
+and in a chat's own worktree, every agent turn that changed files ends in a
+**checkpoint commit**, its sha stamped on the chat message, so every reply's
+diff is addressable forever (a folder or repository you opened gets none by
+itself). Work never updates
 the default branch of a repository it did not create, or any branch there
 it did not make: sync fetches and fast-forwards, and local work reaches a
 shared repository as a `work/` branch plus a **pull request**, opened from
@@ -327,6 +335,12 @@ a session event too, `session.request-opened`, which a workflow answers with
 chat no one watches waits for that answer instead of being refused at once
 (ADR
 [0352](docs/decisions/0352-an-opened-request-is-a-session-event-automations-answer-unattended-approvals.md)).
+Setting a workspace up is a session event as well, `session.workspace-setup`:
+a project workflow binds it in its own source, the turn waits for its runs,
+and a sandbox that already set up is kept when its base moves until a run
+asks for the setup's network, so a pull request reviewer installs again only
+when a lockfile changed (`sessions.changedPaths` says which paths did) (ADR
+[0355](docs/decisions/0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md)).
 Archive recursively stops active work only after reporting its impact, while
 keeping the session tree restorable and searchable. Session source records
 whether a conversation began on desktop, mobile, Slack, Claude, MCP, or API.
@@ -364,12 +378,14 @@ other run the part of them its caller reaches
 
 Project automations follow the published program: each revision of `main`
 that builds and asks for no new authority goes live by itself, after the
-project's deploy workflow (named in `.work/project.json`) runs once at that
-revision; a revision that needs new consent waits for its owner. A member's
+project's deploy workflows (the ones that bind the `project.deploy` trigger
+in their source) each run once at that revision; a revision that needs new
+consent waits for its owner. A member's
 own automation follows once the member turns it on. Host project hooks can return
 per-project secrets on create and are retried on delete until done
 ([0330](docs/decisions/0330-enablements-follow-the-published-program.md),
-[0331](docs/decisions/0331-project-deploy-workflow-and-host-project-hooks.md)).
+[0331](docs/decisions/0331-project-deploy-workflow-and-host-project-hooks.md),
+[0355](docs/decisions/0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md)).
 
 ## Apps
 
