@@ -39,6 +39,7 @@ import type { HostCallFollowOutcome } from "./host-call-waits.js";
 import { HostCallParkedError } from "./host-call-waits.js";
 import { outOfDiskFor, withOutOfDisk } from "./out-of-disk.js";
 import { withProgram } from "./program-reader.js";
+import { ReplicaClaimBusyError, withReplicaClaim } from "./replica-claims.js";
 import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
 import {
   actionKey,
@@ -79,6 +80,12 @@ const DEFAULT_TIMEOUT_SECONDS = 600;
 const MAX_TIMEOUT_SECONDS = 14_400;
 /** How long past its own timeout a command's network may stay wide. */
 const WIDENING_GRACE_MS = 60_000;
+/**
+ * How long the network lock is held without a renewal before another
+ * replica may take it, and how long a start or an end waits for it.
+ */
+const NETWORK_LOCK_SECONDS = 60;
+const NETWORK_LOCK_WAIT_MS = 5 * 60_000;
 /** A start that left no process behind this long ago did not happen. */
 const STALE_START_MS = 5 * 60_000;
 /** How soon a command waiting for its workspace looks again. */
@@ -365,12 +372,14 @@ export class SessionExecService {
         // shortly, within the setup's time rather than the command's.
         if (error instanceof SetupSandboxPendingError)
           return this.unclaim(action).then(() => "replacing" as const);
-        // Starting, or waiting for a machine (ADR 0258): tried again each
-        // slice, within the command's own timeout.
+        // Starting, waiting for a machine (ADR 0258), or behind another
+        // command's network change for longer than a start waits: tried
+        // again each slice, within the command's own timeout.
         if (
           (error instanceof SessionWorkspaceUnavailableError &&
             error.reason === "starting") ||
-          error instanceof EnvironmentCapacityError
+          error instanceof EnvironmentCapacityError ||
+          error instanceof ReplicaClaimBusyError
         )
           return this.unclaim(action).then(() => "waiting" as const);
         return this.fail({
@@ -516,8 +525,9 @@ export class SessionExecService {
     // sandbox another's widening holds, nor widens one a session command
     // runs in, and a narrowing waits for the last widening.
     const shared = await this.workspaceOf(action);
-    return this.withNetworkLock(shared.key, async (trx) => {
-      const running = await runningExecs(trx, {
+    const db = this.deps.db;
+    return this.withNetworkLock(shared.key, async () => {
+      const running = await runningExecs(db, {
         sessionIds: shared.sessionIds,
         except: action.id,
         sandboxId: handle.sandboxId,
@@ -526,7 +536,7 @@ export class SessionExecService {
       // chat's current one: one that ended, or ran out of time, already
       // stopped its commands and narrowed the sandbox (ADR 0324).
       if (setup) {
-        const chat = await trx
+        const chat = await db
           .selectFrom("agent_sessions")
           .select("setup_run")
           .where("id", "=", action.session_id)
@@ -548,7 +558,7 @@ export class SessionExecService {
       if (
         args.in === "session" &&
         (running.some((other) => other.widening) ||
-          (!setup && (await setupWidened(trx, shared.key))))
+          (!setup && (await setupWidened(db, shared.key))))
       )
         throw new SessionExecRefusedError(
           "The chat's workspace is on its setup's network for a setup command; a command in the session runs once it is narrow again",
@@ -557,7 +567,7 @@ export class SessionExecService {
         throw new SessionExecRefusedError(
           "A command in the session is running in this workspace, so it cannot be given the setup's network",
         );
-      const current = await trx
+      const current = await db
         .selectFrom("session_actions")
         .select("progress")
         .where("id", "=", action.id)
@@ -585,7 +595,7 @@ export class SessionExecService {
         ...(widening ? { widening } : {}),
         ...(commit ? { program: commit } : {}),
       };
-      await trx
+      await db
         .updateTable("session_actions")
         .set({ progress: progressJson(progress), updated_at: new Date() })
         .where("id", "=", action.id)
@@ -651,19 +661,26 @@ export class SessionExecService {
   }
 
   /**
-   * Run `work` holding the workspace's network lock (a transaction-scoped
-   * advisory lock), so widenings, narrowings and starts in one sandbox
-   * happen one at a time on every replica.
+   * Run `work` holding the workspace's network lock, so widenings,
+   * narrowings and starts in one sandbox happen one at a time on every
+   * replica. It is a claim in Postgres (ADR 0193), renewed while the work
+   * runs, and not a transaction: what it guards talks to the machine, and a
+   * worker's operations travel through the database, which a
+   * single-connection one (PGlite) cannot answer while a transaction is
+   * open. One that stays held past the wait fails the caller, which tries
+   * again.
    */
   private withNetworkLock<T>(
     workspaceSessionId: string,
-    work: (trx: Transaction<DB>) => Promise<T>,
+    work: () => Promise<T>,
   ): Promise<T> {
-    return this.deps.db.transaction().execute(async (trx) => {
-      await sql`select pg_advisory_xact_lock(hashtext(${`work-exec-network:${workspaceSessionId}`}))`.execute(
-        trx,
-      );
-      return work(trx);
+    return withReplicaClaim({
+      db: this.deps.db,
+      name: `work-exec-network:${workspaceSessionId}`,
+      ttlSeconds: NETWORK_LOCK_SECONDS,
+      waitMs: NETWORK_LOCK_WAIT_MS,
+      pollMs: 50,
+      operation: () => work(),
     });
   }
 
@@ -1010,26 +1027,23 @@ export class SessionExecService {
   }): Promise<void> {
     const { action, progress } = args;
     const shared = await this.workspaceOf(action);
-    // Read before the lock is taken: under it, everything is asked through
-    // its transaction, the only one a single-connection database (PGlite)
-    // answers while it is open. A sandbox replaced meanwhile is not this
-    // command's, or is gone: narrowing it then changes nothing.
-    const sandbox = await this.deps.sessions.chatSandbox({
-      projectId: action.project_id,
-      sessionId: action.session_id,
-    });
-    await this.withNetworkLock(shared.key, async (trx) => {
-      await trx
+    const db = this.deps.db;
+    await this.withNetworkLock(shared.key, async () => {
+      await db
         .updateTable("session_actions")
         .set({ progress: sql<Json>`progress - 'widening'` })
         .where("id", "=", action.id)
         .execute();
-      const others = await runningExecs(trx, {
+      const others = await runningExecs(db, {
         sessionIds: shared.sessionIds,
         except: action.id,
         ...(progress.sandboxId ? { sandboxId: progress.sandboxId } : {}),
       });
       if (others.some((other) => other.widening)) return;
+      const sandbox = await this.deps.sessions.chatSandbox({
+        projectId: action.project_id,
+        sessionId: action.session_id,
+      });
       if (!sandbox || sandbox.sandboxId !== progress.sandboxId) return;
       await narrowSandboxEgress({
         provider: sandbox.provider,
