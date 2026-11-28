@@ -11,17 +11,18 @@ whose setup has a network of its own (ADR 0257) and a setup workflow (ADR
 0324). Every push replaced the chat's sandbox, checked the repository out
 again and reinstalled, even when no lockfile changed: Work decided that setup
 was due and replaced the sandbox before any project code was asked. And
-`setup.workflow` was the one place Work took a workflow by name from
-configuration, a second home for subscriptions that ADR 0039 puts in workflow
-source and ADR 0352 refused for approvals.
+`setup.workflow` took a workflow by name from an Environment's configuration,
+a second home for subscriptions that ADR 0039 puts in workflow source and ADR
+0352 refused for approvals.
 
 ## Decision
 
 **A hook is a trigger kind, or host code.** Where project code should run at a
 point in Work's own lifecycle, Work records a session event and workflows bind
 it in their source, with config and `where`, consented with their enablement.
-Configuration never names a workflow. `setup.workflow` is removed: a manifest
-that names it is invalid and says to bind the trigger.
+An Environment never names a workflow. `setup.workflow` is removed: a manifest
+that names it is invalid and says to bind the trigger. The deploy workflow
+(ADR 0331) is the one name left in a manifest, unchanged here.
 
 **An event can be waited for.** Its emitter asks who listens before it
 records anything: an active project automation bound to the kind whose config
@@ -84,4 +85,4 @@ workflow's choice. The executor's network lock is a claim in Postgres (ADR
 0193), not a transaction: a worker's operations travel through the database,
 which a single-connection one could not answer while the lock was held.
 Later hooks (a workspace going idle, a result being submitted) reuse the
-waited event.
+waited event, and the deploy workflow could become one.
