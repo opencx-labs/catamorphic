@@ -3,6 +3,8 @@
 > Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
 >
 > Projects may define their own kinds on top of host kinds, and every binding may filter with `where` ([ADR 0171](0171-project-trigger-kinds-and-declarative-webhook-ingress.md)).
+>
+> A point in Work's own lifecycle where project code runs is a kind too, never a workflow named in configuration, and its emitter may wait for the runs it starts ([ADR 0355](0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md)).
 
 ## Status
 

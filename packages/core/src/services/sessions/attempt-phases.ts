@@ -31,7 +31,10 @@ export const ATTEMPT_PHASES = [
   "workspace.restore",
   /** The Environment's setup command (ADR 0208), on its own network or not. */
   "setup.environment",
-  /** The Environment's setup workflow (ADR 0324). */
+  /**
+   * The wait for the runs of the workspace's setup event: the project's
+   * workflows bound to `session.workspace-setup` (ADR 0355).
+   */
   "setup.workflow",
   /** The member's own setup command. */
   "setup.personal",

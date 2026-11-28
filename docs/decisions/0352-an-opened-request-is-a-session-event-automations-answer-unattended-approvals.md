@@ -3,6 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-11-25
 - **Amends:** 0054, 0138, 0176, 0181
+- **Amended by:** [0355](0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md): setup no longer names a workflow either, and an event's emitter can wait for the runs it starts
 
 ## Context
 
