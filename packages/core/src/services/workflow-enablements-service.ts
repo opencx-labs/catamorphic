@@ -1641,7 +1641,7 @@ async function latestRevisionSequence(
 }
 
 /** The branch published revisions are of (ADR 0330). */
-const PUBLISHED_BRANCH = "main";
+export const PUBLISHED_BRANCH = "main";
 
 /** Recorded as the actor of what following does on its own. */
 export const FOLLOW_ACTOR = "work:follow";

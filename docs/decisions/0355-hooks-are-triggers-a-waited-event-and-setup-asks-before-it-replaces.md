@@ -2,7 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-11-28
-- **Amends:** 0257, 0324, 0352, 0354 (and 0039 in spirit)
+- **Amends:** 0257, 0324, 0331, 0352, 0354 (and 0039 in spirit)
 
 ## Context
 
@@ -12,17 +12,18 @@ whose setup has a network of its own (ADR 0257) and a setup workflow (ADR
 again and reinstalled, even when no lockfile changed: Work decided that setup
 was due and replaced the sandbox before any project code was asked. And
 `setup.workflow` took a workflow by name from an Environment's configuration,
-a second home for subscriptions that ADR 0039 puts in workflow source and ADR
-0352 refused for approvals.
+as `deploy.workflow` did from the manifest (ADR 0331): a second home for
+subscriptions that ADR 0039 puts in workflow source and ADR 0352 refused for
+approvals.
 
 ## Decision
 
 **A hook is a trigger kind, or host code.** Where project code should run at a
-point in Work's own lifecycle, Work records a session event and workflows bind
-it in their source, with config and `where`, consented with their enablement.
-An Environment never names a workflow. `setup.workflow` is removed: a manifest
-that names it is invalid and says to bind the trigger. The deploy workflow
-(ADR 0331) is the one name left in a manifest, unchanged here.
+point in Work's own lifecycle, Work records an event and workflows bind it in
+their source, with config and `where`, consented with their enablement.
+Nothing in a manifest names a workflow for Work to run. `setup.workflow` and
+`deploy.workflow` are removed: a manifest that names either is invalid (a
+revision with `deploy` does not go live) and says which trigger to bind.
 
 **An event can be waited for.** Its emitter asks who listens before it
 records anything: an active project automation bound to the kind whose config
@@ -65,6 +66,25 @@ the sandbox and what it installed stay, and setup is recorded done for the
 base. Not while another session's turn runs in the workspace: it is replaced
 as before.
 
+**`project.deploy`.** A revision's deploy step (ADR 0331) is this event. Its
+listeners are read at the new revision: the project automations, neither
+temporary nor turned off, whose workflow binds the kind there. None means no
+deploy step. Otherwise Work records the event once per try of the revision,
+waited and marked with the commit it is delivered at
+(`project_events.at_commit`). The dispatcher leaves such an event alone, since
+it delivers at each enablement's own commit; the deploy step starts each
+listener's run at the revision, stamped with the event, under the automation's
+existing authority, and the revision goes live once all succeeded. `detail` is
+`{ commit, previousCommit }`. A failed or canceled run, the timeout, a
+suspended listener or one whose authority the revision changes fails the
+revision with the reason, as before. Two things differ from 0331: a workflow
+bound to the event that nobody turned on for the project is not a listener
+(naming it failed the revision), and two project automations of one workflow
+both run (they failed it). `published_revisions` keeps the event and its
+listeners' runs (`deploy_event_id`, `deploy_listeners`) where it kept one
+workflow, enablement and run. The name is the manifest key it replaces and the
+revision's `deploying` status, a noun like `session.workspace-setup`.
+
 **`changedPaths`.** `sessions.changedPaths({ sessionId, from, to })` answers
 `{ paths, truncated, complete }` from the session's copy, at most 2000 paths;
 `complete: false` when the copy lacks a commit.
@@ -85,4 +105,6 @@ workflow's choice. The executor's network lock is a claim in Postgres (ADR
 0193), not a transaction: a worker's operations travel through the database,
 which a single-connection one could not answer while the lock was held.
 Later hooks (a workspace going idle, a result being submitted) reuse the
-waited event, and the deploy workflow could become one.
+waited event. A project that named a deploy workflow binds the trigger in it
+and removes the manifest key in one revision; since the workflow's triggers
+changed, that revision's deploy asks for its automation's consent first.

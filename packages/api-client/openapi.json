@@ -17772,15 +17772,30 @@
                               "failed"
                             ]
                           },
-                          "deployWorkflow": {
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "deployRunId": {
+                          "deployEventId": {
                             "nullable": true,
                             "type": "string",
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "deployRuns": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "workflowName": {
+                                  "type": "string"
+                                },
+                                "runId": {
+                                  "nullable": true,
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                }
+                              },
+                              "required": ["workflowName", "runId"],
+                              "additionalProperties": false
+                            }
                           },
                           "previousCommitSha": {
                             "nullable": true,
@@ -17846,8 +17861,8 @@
                           "projectId",
                           "commitSha",
                           "status",
-                          "deployWorkflow",
-                          "deployRunId",
+                          "deployEventId",
+                          "deployRuns",
                           "previousCommitSha",
                           "error",
                           "report",
@@ -17952,15 +17967,30 @@
                         "failed"
                       ]
                     },
-                    "deployWorkflow": {
-                      "nullable": true,
-                      "type": "string"
-                    },
-                    "deployRunId": {
+                    "deployEventId": {
                       "nullable": true,
                       "type": "string",
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "deployRuns": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "workflowName": {
+                            "type": "string"
+                          },
+                          "runId": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          }
+                        },
+                        "required": ["workflowName", "runId"],
+                        "additionalProperties": false
+                      }
                     },
                     "previousCommitSha": {
                       "nullable": true,
@@ -18022,8 +18052,8 @@
                     "projectId",
                     "commitSha",
                     "status",
-                    "deployWorkflow",
-                    "deployRunId",
+                    "deployEventId",
+                    "deployRuns",
                     "previousCommitSha",
                     "error",
                     "report",

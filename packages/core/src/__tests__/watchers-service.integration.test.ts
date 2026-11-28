@@ -444,6 +444,31 @@ describe("temporary watchers", () => {
     }
     expect(await dispatchPending()).toBe(0);
 
+    // An event delivered at a published revision is its emitter's to
+    // deliver there (a deploy, ADR 0355): the dispatcher, which runs each
+    // automation at the commit it is on, writes it no receipt.
+    const atRevision = await db
+      .insertInto("project_events")
+      .values({
+        project_id: projectId,
+        source: "test",
+        kind: "issue.changed",
+        external_id: "at-a-revision",
+        occurred_at: new Date(),
+        payload: JSON.stringify({}),
+        at_commit: watcher.commitSha,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    expect(await dispatchPending()).toBe(0);
+    expect(
+      await db
+        .selectFrom("project_event_deliveries")
+        .select("event_id")
+        .where("event_id", "=", atRevision.id)
+        .execute(),
+    ).toEqual([]);
+
     const appended = await events.append({
       projectId,
       source: "test",

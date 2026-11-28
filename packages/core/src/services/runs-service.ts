@@ -1489,15 +1489,17 @@ export class RunsService {
 
   /**
    * Run an enablement at a later published commit, under the authority it
-   * was consented to, before it moves there (ADR 0331): the project's
-   * deploy workflow. Refused when that commit needs new consent or its
-   * workflow does not build.
+   * was consented to, before it moves there (ADRs 0331, 0355): a workflow
+   * bound to the revision's deploy event. Refused when that commit needs
+   * new consent or its workflow does not build.
    */
   async triggerWithEnablementAtRevision(
     args: TriggerProductionRunInput & {
       enablementId: string;
       commitSha: string;
     },
+    /** The host's delivery of the revision's deploy event (ADR 0355). */
+    dispatch?: HostDispatch,
   ): Promise<Run> {
     const service = this.deps.workflowEnablements?.();
     if (!service) throw new Error("Workflow enablements are not configured");
@@ -1519,22 +1521,25 @@ export class RunsService {
     });
     if (ready.kind !== "ready")
       throw new WorkflowRevisionUnavailableError(ready.reason, ready.kind);
-    return this.trigger({
-      ...args,
-      identity: validated.ownerIdentity,
-      environment: enablement.environment,
-      commitSha: ready.preview.commitSha,
-      remoteBranch: enablement.remoteBranch,
-      connectionAuthorizationSnapshot: enablement.connections,
-      workflowEnablementId: enablement.id,
-      enablementSnapshot: {
-        commitSha: enablement.commitSha,
-        consentDigest: enablement.consentDigest,
-        revision: enablement.revision,
+    return this.trigger(
+      {
+        ...args,
+        identity: validated.ownerIdentity,
+        environment: enablement.environment,
+        commitSha: ready.preview.commitSha,
+        remoteBranch: enablement.remoteBranch,
+        connectionAuthorizationSnapshot: enablement.connections,
+        workflowEnablementId: enablement.id,
+        enablementSnapshot: {
+          commitSha: enablement.commitSha,
+          consentDigest: enablement.consentDigest,
+          revision: enablement.revision,
+        },
+        unattended: true,
+        atRevision: true,
       },
-      unattended: true,
-      atRevision: true,
-    });
+      dispatchFacts(dispatch),
+    );
   }
 
   /**

@@ -515,6 +515,45 @@ export class TriggersService {
     );
   }
 
+  /**
+   * The workflows that bind `kind` at a published commit (ADR 0355), for an
+   * event its emitter delivers at that revision rather than to each
+   * activation: those with a binding whose config and `where` match
+   * `payload` as a dispatch matches them. None where the host registers no
+   * such kind.
+   */
+  async workflowsBoundAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    remoteBranch: string;
+    kind: string;
+    payload: Json;
+  }): Promise<string[]> {
+    const kind = this.registry.get(args.kind);
+    if (!kind) return [];
+    const bindings = await this.listAtCommit({
+      identity: args.identity,
+      projectId: args.projectId,
+      commitSha: args.commitSha,
+      remoteBranch: args.remoteBranch,
+      kind: kind.name,
+    });
+    // As stored, with U+FFFD for half an emoji or a NUL, like a dispatch.
+    const payload = storedJson(args.payload);
+    return [
+      ...new Set(
+        bindings
+          .filter(
+            (binding) =>
+              (kind.matches?.({ config: binding.config, payload }) ?? true) &&
+              matchesAllWhere(binding.where, payload),
+          )
+          .map((binding) => binding.workflowName),
+      ),
+    ];
+  }
+
   /** Production binding rows for host-owned durable trigger dispatchers. */
   async storedProductionBindings(args: {
     identity: Identity;

@@ -606,6 +606,10 @@ export {
   PublicationsService,
 } from "./services/publications-service.js";
 export {
+  DEPLOY_WORKFLOW_REMOVED,
+  type DeployListener,
+  PROJECT_DEPLOY_EVENT,
+  PROJECT_EVENT_SOURCE,
   type ProjectDeploy,
   type PublishedRevision,
   PublishedRevisionNotRetryableError,

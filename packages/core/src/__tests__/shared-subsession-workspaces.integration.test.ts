@@ -119,6 +119,13 @@ async function until(
  * A project automation that listens for every setup's event (ADR 0355) and
  * whose runs end at once: `record` sees each event Work records.
  */
+/** A stored JSON object's fields, or none when it is not an object. */
+function storedRecord(value: Json): { [key: string]: Json | undefined } {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : {};
+}
+
 function setupHooks(input: {
   record: SetupHooks["events"]["record"];
 }): SetupHooks {
@@ -687,7 +694,7 @@ describe("subagents of a server agent (ADR 0322)", () => {
               .execute()
           ).map((row) => row.id);
           calls.push({
-            sessionId: event.session.id,
+            sessionId: String(storedRecord(event.payload).sessionId),
             payload: event.payload,
             recordedOn,
           });

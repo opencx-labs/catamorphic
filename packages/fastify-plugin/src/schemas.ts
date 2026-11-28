@@ -334,7 +334,7 @@ export const WorkflowEnablementSchema = WorkflowEnablementTargetSchema.extend({
   updatedAt: z.string().datetime(),
 });
 
-/** One published revision and how it went live (ADRs 0330, 0331). */
+/** One published revision and how it went live (ADRs 0330, 0331, 0355). */
 export const PublishedRevisionSchema = z.object({
   id: z.string().uuid(),
   sequence: z.number().int(),
@@ -348,8 +348,15 @@ export const PublishedRevisionSchema = z.object({
     "superseded",
     "failed",
   ]),
-  deployWorkflow: z.string().nullable(),
-  deployRunId: z.string().uuid().nullable(),
+  /** The deploy event recorded for it, when a project automation listened. */
+  deployEventId: z.string().uuid().nullable(),
+  /** The workflows bound to that event at the revision, and each one's run. */
+  deployRuns: z.array(
+    z.object({
+      workflowName: z.string(),
+      runId: z.string().uuid().nullable(),
+    }),
+  ),
   previousCommitSha: z.string().nullable(),
   error: z.string().nullable(),
   /** What following the revision did to each following enablement. */

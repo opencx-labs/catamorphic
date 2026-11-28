@@ -48,6 +48,7 @@ import {
   machineProjectEvent,
   ObjectRemoteBackend,
   PostgresObjectStore,
+  PROJECT_TRIGGER_KINDS,
   ProjectManager,
   SESSION_TRIGGER_KINDS,
   schedule,
@@ -701,6 +702,8 @@ async function createWorkServerInner(
       schedule,
       webhook,
       ...SESSION_TRIGGER_KINDS,
+      // A revision's deploy is an event workflows bind (ADR 0355).
+      ...PROJECT_TRIGGER_KINDS,
       ...DIRECTORY_TRIGGER_KINDS,
       // What happens to machines, for projects' own workflows (ADR 0349).
       ...MACHINE_TRIGGER_KINDS,

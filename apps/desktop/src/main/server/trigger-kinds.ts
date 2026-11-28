@@ -1,6 +1,7 @@
 import {
   aiToolCall,
   defineTriggerKind,
+  PROJECT_TRIGGER_KINDS,
   SESSION_TRIGGER_KINDS,
   schedule,
   webhook,
@@ -17,6 +18,8 @@ export const terminalIdle = defineTriggerKind({
 });
 export const DESKTOP_TRIGGER_KINDS = [
   ...SESSION_TRIGGER_KINDS,
+  // A revision's deploy is an event workflows bind (ADR 0355).
+  ...PROJECT_TRIGGER_KINDS,
   terminalIdle,
   aiToolCall,
   schedule,

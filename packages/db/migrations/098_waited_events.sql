@@ -19,3 +19,21 @@ ALTER TABLE workflow_runs
   ADD COLUMN event_id uuid;
 CREATE INDEX idx_workflow_runs_event
   ON workflow_runs (event_id) WHERE event_id IS NOT NULL;
+
+-- at_commit: the published commit an event is delivered at. Its emitter
+-- reads the bindings of that revision and starts their runs there, so the
+-- dispatcher, which delivers to each activation at its enablement's own
+-- commit, leaves it alone. A deploy event is one (ADR 0355).
+ALTER TABLE project_events
+  ADD COLUMN at_commit char(40);
+
+-- A revision's deploy is an event workflows bind (ADR 0355), not a workflow
+-- the manifest names: the event recorded for the current try, and the
+-- project automations that listen at the revision with the run each
+-- started ([{ enablementId, workflowName, runId }]).
+ALTER TABLE published_revisions
+  DROP COLUMN deploy_workflow,
+  DROP COLUMN deploy_enablement_id,
+  DROP COLUMN deploy_run_id,
+  ADD COLUMN deploy_event_id uuid,
+  ADD COLUMN deploy_listeners jsonb NOT NULL DEFAULT '[]'::jsonb;

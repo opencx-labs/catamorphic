@@ -174,7 +174,11 @@ import { WaitedEventsService } from "./services/waited-events.js";
 import { WatchersService } from "./services/watchers-service.js";
 import { WebhooksService } from "./services/webhooks-service.js";
 import { WorkWakeups } from "./services/work-wakeups.js";
-import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
+import {
+  FOLLOW_ACTOR,
+  PUBLISHED_BRANCH,
+  WorkflowEnablementsService,
+} from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 import { WorkspaceCheckoutsService } from "./services/workspace-checkouts.js";
 
@@ -481,6 +485,8 @@ export class CatamorphicCore {
   readonly workflowEnablements: WorkflowEnablementsService;
   /** Published revisions going live in order (ADRs 0330, 0331). */
   readonly publishedRevisions: PublishedRevisionsService;
+  /** Events whose emitter waits for the runs they start (ADR 0355). */
+  readonly waitedEvents: WaitedEventsService;
   readonly schedules: SchedulesService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
@@ -1418,10 +1424,37 @@ export class CatamorphicCore {
     );
     this.roles = new RolesService(this.db, this.projectManager);
     this.memberships = new MembershipsService(this.db, this.roles);
+    // An event whose emitter waits for the runs it starts (ADR 0355): a
+    // workspace's setup, a revision's deploy.
+    this.waitedEvents = new WaitedEventsService({
+      db: this.db,
+      triggers: this.triggers,
+      cancelRun: async ({ tenantId, runId, reason }) => {
+        await coordinator.cancel({
+          identity: { tenantId, externalUserId: PROJECT_PRINCIPAL_ID },
+          runId,
+          reason,
+        });
+      },
+      wakeups: this.wakeups,
+    });
+    const waitedEvents = this.waitedEvents;
     this.publishedRevisions = new PublishedRevisionsService({
       db: this.db,
       enablements: this.workflowEnablements,
       runs: () => this.runs,
+      // A deploy is delivered at the revision it publishes: its bindings
+      // are read there, on the published branch.
+      boundWorkflows: ({ tenantId, projectId, commitSha, kind, payload }) =>
+        this.triggers.workflowsBoundAtCommit({
+          identity: { tenantId, externalUserId: FOLLOW_ACTOR },
+          projectId,
+          commitSha,
+          remoteBranch: PUBLISHED_BRANCH,
+          kind,
+          payload,
+        }),
+      recordEvent: (input) => waitedEvents.record(input),
       readManifest: async ({ tenantId, projectId, commitSha }) => {
         const repo = await this.projectManager.openPublished({
           tenantId,
@@ -1629,18 +1662,7 @@ export class CatamorphicCore {
       // 0355): the turn waits for the runs it starts.
       const sessionExec = this.sessionExec;
       this.agentSessions.setSetupHooks({
-        events: new WaitedEventsService({
-          db: this.db,
-          triggers: this.triggers,
-          cancelRun: async ({ tenantId, runId, reason }) => {
-            await coordinator.cancel({
-              identity: { tenantId, externalUserId: PROJECT_PRINCIPAL_ID },
-              runId,
-              reason,
-            });
-          },
-          wakeups: this.wakeups,
-        }),
+        events: this.waitedEvents,
         end: (input) => sessionExec.endSetup(input),
       });
       this.sessionPreviews = new SessionPreviewsService({

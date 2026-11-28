@@ -283,13 +283,19 @@ project's declared run secret names. Only a parse, missing-workflow or
 trigger-registration failure skips a revision; other errors are retried with
 backoff. Revisions are recorded only by deploys and the code-host sync, and
 only when the commit is what `main` points to then.
-A project's deploy workflow (`.work/project.json` `deploy.workflow`) runs
-once at each revision, through its own project automation, before anything
-moves; a failure moves nothing (ADR 0331). `GET <api>/projects/:projectId/published-revisions`
-lists revisions with their status, deploy run and per-enablement report, and
+A project's deploy workflows bind the `project.deploy` trigger in their source
+(ADRs 0331, 0355; register `PROJECT_TRIGGER_KINDS` from
+`@catamorphic/server-sdk` so the binding validates). Work records that event
+once at each revision, runs every project automation whose workflow binds it
+at that revision, and moves nothing until all of them succeeded; a failure
+moves nothing. `.work/project.json` no longer names a workflow: a revision
+whose manifest has `deploy` does not go live and says to bind the trigger.
+`GET <api>/projects/:projectId/published-revisions`
+lists revisions with their status, deploy event and runs (`deployEventId`,
+`deployRuns`) and per-enablement report, and
 `POST <api>/projects/:projectId/published-revisions/retry`
 (`automations:write`) tries the latest failed one again; Work also retries it
-once when the deploy workflow's project automation is consented to again.
+once when a project automation that listened for its deploy is consented to again.
 Replicas coordinate through a per-project replica claim and compare-and-set
 status changes, so none moves an enablement twice or out of order. Workflows reach chats with one operation,
 `catamorphic.sessions.deliver`, naming the chat by `sessionId` or by a `key`
@@ -865,10 +871,10 @@ const projectDatabases: ProjectLifecycleHooks = {
 };
 ```
 
-The project migrates that database from its deploy workflow
-(`"deploy": { "workflow": "migrateDatabase" }` in `.work/project.json`), which
-Work runs once at each published revision before following enablements move
-there (ADRs 0330, 0331).
+The project migrates that database from a deploy workflow: one that binds
+`trigger("project.deploy")` in its source and is turned on as a project
+automation. Work runs it once at each published revision before following
+enablements move there (ADRs 0330, 0331, 0355).
 
 Workflow code stays vendor-blind — it imports the plugin's client and reads
 `process.env.DATABASE_URL`. Providers must not return `CATAMORPHIC_`-prefixed

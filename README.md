@@ -370,12 +370,14 @@ other run the part of them its caller reaches
 
 Project automations follow the published program: each revision of `main`
 that builds and asks for no new authority goes live by itself, after the
-project's deploy workflow (named in `.work/project.json`) runs once at that
-revision; a revision that needs new consent waits for its owner. A member's
+project's deploy workflows (the ones that bind the `project.deploy` trigger
+in their source) each run once at that revision; a revision that needs new
+consent waits for its owner. A member's
 own automation follows once the member turns it on. Host project hooks can return
 per-project secrets on create and are retried on delete until done
 ([0330](docs/decisions/0330-enablements-follow-the-published-program.md),
-[0331](docs/decisions/0331-project-deploy-workflow-and-host-project-hooks.md)).
+[0331](docs/decisions/0331-project-deploy-workflow-and-host-project-hooks.md),
+[0355](docs/decisions/0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md)).
 
 ## Apps
 

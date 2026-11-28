@@ -335,7 +335,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0328](0328-hand-offs-keep-results-acp-reports-its-turn.md) | Hand-offs keep results and open requests; ACP agents take effort and report their turn | Accepted (amends 0198, 0241, 0255, 0298; amended by 0333) |
 | [0329](0329-model-usage-is-telemetry-and-a-session-read.md) | Model usage is telemetry and a session read | Accepted (amends 0180 and 0293) |
 | [0330](0330-enablements-follow-the-published-program.md) | Enablements follow the published program | Accepted (amends 0068, 0158, 0170; amended by 0335: declared store documents compare by coverage) |
-| [0331](0331-project-deploy-workflow-and-host-project-hooks.md) | A project deploy workflow, and host project hooks that return secrets | Accepted (amends 0046) |
+| [0331](0331-project-deploy-workflow-and-host-project-hooks.md) | A project deploy workflow, and host project hooks that return secrets | Accepted (amends 0046; amended by 0355: deploy workflows bind `project.deploy`, the manifest names none) |
 | [0332](0332-commands-run-apart-from-the-agent.md) | The commands an agent runs execute apart from the agent | Accepted (amends 0175, 0180, 0204, 0208, 0257, 0259, 0324) |
 | [0333](0333-stalled-turns-are-visible-and-restartable.md) | A turn that stops making progress is visible, an event, and restartable | Accepted (amends 0198, 0245, 0328; amended by 0336) |
 | [0334](0334-read-only-caches-only-a-trusted-fill-writes.md) | Read-only caches that only a trusted fill writes | Accepted (amends 0208, 0257) |
@@ -359,4 +359,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0352](0352-an-opened-request-is-a-session-event-automations-answer-unattended-approvals.md) | An opened request is a session event, and a project's automations answer an unattended chat's approvals | Proposed (amends 0054, 0138, 0176, 0181) |
 | [0353](0353-a-workspaces-base-arrives-by-git-and-the-environment-says-how.md) | A workspace's base arrives by Git, and the Environment says how it is checked out | Proposed (amends 0178, 0208, 0257, 0343, 0344) |
 | [0354](0354-an-attempt-records-its-preparations-phases-and-setup-hears-what-it-runs-on.md) | An attempt records its preparation's phases, and a setup command hears what it runs on | Proposed (amends 0198, 0208, 0258, 0324, 0333) |
-| [0355](0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md) | Hooks are triggers, an event can be waited for, and setup asks before it replaces | Proposed (amends 0257, 0324, 0352, 0354) |
+| [0355](0355-hooks-are-triggers-a-waited-event-and-setup-asks-before-it-replaces.md) | Hooks are triggers, an event can be waited for, and setup asks before it replaces | Proposed (amends 0257, 0324, 0331, 0352, 0354) |

@@ -7,6 +7,7 @@ import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectListener, TriggersService } from "./triggers-service.js";
 import type { WorkWakeups } from "./work-wakeups.js";
 import {
+  type PendingProjectEvent,
   type PendingSessionEvent,
   sessionEventInput,
 } from "./workspace-events.js";
@@ -120,11 +121,16 @@ export class WaitedEventsService {
 
   /**
    * Record `event` as one that is waited for, and wake this process's
-   * dispatcher so its runs start without a poll interval.
+   * dispatcher so its runs start without a poll interval. With `atCommit`
+   * the event is delivered at that published revision by its emitter (a
+   * deploy, ADR 0355), which starts its runs itself: the dispatcher leaves
+   * it alone. Recording the same event again changes nothing, so an emitter
+   * that stopped after it may record it once more.
    */
   async record(input: {
     executor?: Executor;
-    event: PendingSessionEvent;
+    event: PendingProjectEvent;
+    atCommit?: string;
   }): Promise<void> {
     const { event } = input;
     await (input.executor ?? this.deps.db)
@@ -132,15 +138,40 @@ export class WaitedEventsService {
       .values({
         id: event.id,
         project_id: event.projectId,
-        source: "session",
+        source: event.source,
         kind: event.kind,
         external_id: event.externalId,
         occurred_at: new Date(event.occurredAt),
         payload: event.payload,
         waited: true,
+        ...(input.atCommit ? { at_commit: input.atCommit } : {}),
       })
+      .onConflict((conflict) => conflict.column("id").doNothing())
       .execute();
-    this.deps.wakeups?.notify("events");
+    if (!input.atCommit) this.deps.wakeups?.notify("events");
+  }
+
+  /**
+   * Every run the event started, as its dispatcher stamped them: what an
+   * emitter that delivers its own event (ADR 0355) reads to see where they
+   * stand.
+   */
+  async runs(input: {
+    event: Pick<PendingProjectEvent, "id" | "projectId">;
+  }): Promise<WaitedRun[]> {
+    const rows = await this.deps.db
+      .selectFrom("workflow_runs")
+      .select(["id", "workflow_name", "status", "error"])
+      .where("project_id", "=", input.event.projectId)
+      .where("event_id", "=", input.event.id)
+      .orderBy("created_at")
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      workflowName: row.workflow_name,
+      status: row.status,
+      error: row.error,
+    }));
   }
 
   /**
@@ -151,7 +182,7 @@ export class WaitedEventsService {
    * the end are the emitter's to cancel, with {@link cancel}.
    */
   async settle(input: {
-    event: Pick<PendingSessionEvent, "id" | "projectId" | "kind">;
+    event: Pick<PendingProjectEvent, "id" | "projectId" | "kind">;
     listeners: readonly ProjectListener[];
     /** Epoch milliseconds. */
     deadlineAt: () => number;
@@ -197,7 +228,7 @@ export class WaitedEventsService {
    */
   async cancel(input: {
     tenantId: string;
-    event: Pick<PendingSessionEvent, "id" | "projectId">;
+    event: Pick<PendingProjectEvent, "id" | "projectId">;
     reason: string;
   }): Promise<void> {
     const runs = await this.deps.db
@@ -225,7 +256,7 @@ export class WaitedEventsService {
 
   /** Where the event's deliveries and runs stand now. */
   private async look(input: {
-    event: Pick<PendingSessionEvent, "id" | "projectId">;
+    event: Pick<PendingProjectEvent, "id" | "projectId">;
     listeners: readonly ProjectListener[];
   }): Promise<{
     pending: boolean;

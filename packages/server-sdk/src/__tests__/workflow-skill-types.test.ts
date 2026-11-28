@@ -12,6 +12,7 @@ import {
 import { checkProject, parseProject } from "@catamorphic/parser";
 import { expect, it } from "vitest";
 import { DIRECTORY_TRIGGER_KINDS } from "../directory-trigger-kinds.js";
+import { PROJECT_TRIGGER_KINDS } from "../project-trigger-kinds.js";
 import { schedule } from "../schedule-trigger-kind.js";
 import { SESSION_TRIGGER_KINDS } from "../session-trigger-kinds.js";
 import { webhook } from "../webhook-trigger-kind.js";
@@ -22,6 +23,7 @@ const HOST_KINDS = [
   webhook,
   ...SESSION_TRIGGER_KINDS,
   ...DIRECTORY_TRIGGER_KINDS,
+  ...PROJECT_TRIGGER_KINDS,
 ];
 
 /**
@@ -142,6 +144,8 @@ it("shipped workflow recipes typecheck against the public API and real host trig
       (name) => SEED_SKILLS[`.work/skills/${name}/SKILL.md`],
     ),
     HOST_SKILLS["session-workflows/SKILL.md"],
+    // The deploy workflow a project binds to `project.deploy` (ADR 0355).
+    HOST_SKILLS["workflow-lifecycle/SKILL.md"],
   ]);
   const packs = {
     ...(await packSources("slack-threads")),
@@ -153,7 +157,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
     skills.files[".work/triggers/github.ts"],
   );
   const files = { ...skills.files, ...packs };
-  expect(skills.count).toBe(13);
+  expect(skills.count).toBe(14);
   expect(parseProject(files).triggerKinds.map((kind) => kind.name)).toEqual([
     "github.delivery",
     "github.issue_comment",

@@ -10,11 +10,17 @@ import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { EnvironmentBindingUnavailableError } from "../services/execution-environments-service.js";
 import {
+  DEPLOY_WORKFLOW_REMOVED,
+  PROJECT_DEPLOY_EVENT,
   PublishedRevisionNotRetryableError,
   PublishedRevisionsService,
   parseProjectDeploy,
 } from "../services/published-revisions-service.js";
-import type { Run } from "../services/runs-service.js";
+import {
+  type Run,
+  WorkflowRevisionUnavailableError,
+} from "../services/runs-service.js";
+import { WaitedEventsService } from "../services/waited-events.js";
 import {
   WorkflowEnablementSuspendedError,
   WorkflowEnablementsService,
@@ -46,9 +52,42 @@ const targets = new Map<
 >();
 /** `.work/project.json` per commit. */
 const manifests = new Map<string, string>();
+/** The workflows that bind `project.deploy` at each commit (ADR 0355). */
+const deployBindings = new Map<string, string[]>();
+/** Reading what a commit binds fails with this while set. */
+let bindingsError: Error | null = null;
 const notifications: Array<{ kind: string; to: string; title: string }> = [];
-/** Deploy runs Work started, in order. */
-const deploys: Array<{ runId: string; commit: string; previous: unknown }> = [];
+/** Deploy runs Work started, in order, with the event each was started by. */
+const deploys: Array<{
+  runId: string;
+  workflow: string;
+  commit: string;
+  previous: unknown;
+  event: string;
+}> = [];
+
+/** The deploy event a run was handed as its input. */
+function deployInput(value: unknown): {
+  id: string;
+  commit: string;
+  previous: unknown;
+} {
+  const event = value as {
+    id: string;
+    kind: string;
+    source: string;
+    payload: { detail: { commit: string; previousCommit: unknown } };
+  };
+  expect(event).toMatchObject({
+    kind: PROJECT_DEPLOY_EVENT,
+    source: "project",
+  });
+  return {
+    id: event.id,
+    commit: event.payload.detail.commit,
+    previous: event.payload.detail.previousCommit,
+  };
+}
 let maxLiveDeploys = 0;
 let head = sha("a");
 /** What the project's published main points to. */
@@ -149,11 +188,25 @@ async function addCommit(
 }
 
 function revisionsService(): PublishedRevisionsService {
+  // The waited event as core records it: only who listens is not asked of
+  // it here, since a deploy's listeners are read at its revision.
+  const waited = new WaitedEventsService({
+    db,
+    triggers: { projectListeners: async () => [] },
+    cancelRun: async () => {},
+  });
   return new PublishedRevisionsService({
     db,
     enablements,
+    boundWorkflows: async ({ commitSha, kind }) => {
+      if (bindingsError) throw bindingsError;
+      return kind === PROJECT_DEPLOY_EVENT
+        ? (deployBindings.get(commitSha) ?? [])
+        : [];
+    },
+    recordEvent: (input) => waited.record(input),
     runs: () => ({
-      triggerWithEnablementAtRevision: async (args) => {
+      triggerWithEnablementAtRevision: async (args, dispatch) => {
         const enablement = await db
           .selectFrom("workflow_enablements")
           .select("status")
@@ -165,6 +218,14 @@ function revisionsService(): PublishedRevisionsService {
             enablement.status,
           );
         if (deployStartFailure) throw deployStartFailure;
+        // As the runs service does: the automation's existing authority
+        // runs the revision only when the revision leaves it unchanged.
+        const ready = await enablements.previewAtRevision({
+          enablementId: args.enablementId,
+          commitSha: args.commitSha,
+        });
+        if (ready.kind !== "ready")
+          throw new WorkflowRevisionUnavailableError(ready.reason, ready.kind);
         const existing = await db
           .selectFrom("workflow_runs")
           .select("id")
@@ -179,17 +240,25 @@ function revisionsService(): PublishedRevisionsService {
           .where("status", "not in", ["completed", "failed", "canceled"])
           .execute();
         maxLiveDeploys = Math.max(maxLiveDeploys, live.length + 1);
+        const input = deployInput(args.input);
+        expect(dispatch).toEqual({
+          kind: PROJECT_DEPLOY_EVENT,
+          mode: "async",
+          event: { id: input.id, waited: true },
+        });
         const run = await insertRun({
           workflowName: args.workflowName,
           commitSha: args.commitSha,
           status: "running",
           correlationKey: args.correlationKey,
+          eventId: input.id,
         });
-        const input = args.input as { commit: string; previousCommit: unknown };
         deploys.push({
           runId: run,
+          workflow: args.workflowName,
           commit: input.commit,
-          previous: input.previousCommit,
+          previous: input.previous,
+          event: input.id,
         });
         return { id: run } as Run;
       },
@@ -219,6 +288,7 @@ async function insertRun(input: {
   commitSha: string;
   status: string;
   correlationKey?: string;
+  eventId?: string;
 }): Promise<string> {
   const row = await db
     .insertInto("workflow_runs")
@@ -229,6 +299,7 @@ async function insertRun(input: {
       deployment_artifact_id: targets.get(input.commitSha)?.artifactId ?? null,
       status: input.status,
       correlation_key: input.correlationKey ?? null,
+      event_id: input.eventId ?? null,
       ...(input.status === "running" ? {} : { completed_at: new Date() }),
     })
     .returning("id")
@@ -591,26 +662,31 @@ describe("following the published program (ADR 0330)", () => {
   });
 });
 
-describe("the project's deploy workflow (ADR 0331)", () => {
+describe("a revision's deploy is an event workflows bind (ADRs 0331, 0355)", () => {
   let watcher: string;
   let migrate: string;
-  const deployManifest = JSON.stringify({
-    deploy: { workflow: "migrate" },
-  });
+  /** The workflow `migrate` binds `project.deploy` at this commit. */
+  const migrates = (commitSha: string) =>
+    deployBindings.set(commitSha, ["migrate"]);
+  const latest = async () =>
+    (await revisions.list({ identity: owner, projectId }))[0];
 
-  it("reads deploy from project.json", () => {
+  it("names no workflow in the manifest: one that still does keeps its revision from going live", () => {
     expect(parseProjectDeploy(null)).toEqual({ kind: "none" });
     expect(parseProjectDeploy("{}")).toEqual({ kind: "none" });
-    expect(parseProjectDeploy(deployManifest)).toEqual({
-      kind: "workflow",
-      workflow: "migrate",
+    expect(parseProjectDeploy(JSON.stringify({ environments: {} }))).toEqual({
+      kind: "none",
     });
-    expect(
-      parseProjectDeploy(JSON.stringify({ deploy: { workflow: 3 } })),
-    ).toMatchObject({ kind: "invalid" });
+    for (const deploy of [{ workflow: "migrate" }, {}, "migrate"])
+      expect(parseProjectDeploy(JSON.stringify({ deploy }))).toEqual({
+        kind: "invalid",
+        error: DEPLOY_WORKFLOW_REMOVED,
+      });
+    expect(DEPLOY_WORKFLOW_REMOVED).toContain('trigger("project.deploy")');
+    expect(parseProjectDeploy("{")).toMatchObject({ kind: "invalid" });
   });
 
-  it("runs once at the revision, before following enablements move", async () => {
+  it("records the event once at the revision and runs its listener there, before following enablements move", async () => {
     head = sha("3");
     watcher = (await enablements.list({ identity: owner, projectId })).find(
       (item) => item.workflowName === "watchInbox",
@@ -618,15 +694,56 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     migrate = (await enable("migrate")).id;
 
     await addCommit(sha("4"));
-    manifests.set(sha("4"), deployManifest);
+    migrates(sha("4"));
     await publish(sha("4"));
     await revisions.advance();
 
     expect(deploys).toEqual([
-      expect.objectContaining({ commit: sha("4"), previous: sha("3") }),
+      expect.objectContaining({
+        workflow: "migrate",
+        commit: sha("4"),
+        previous: sha("3"),
+      }),
     ]);
     expect((await statuses()).slice(-1)).toEqual(["4:deploying"]);
-    // Waiting for the deploy: nothing moved, and no second run starts.
+    // The event is recorded as one its emitter waits for and delivers at
+    // the revision, so the dispatcher never hands it to an automation at
+    // the commit it runs now.
+    const recorded = await db
+      .selectFrom("project_events")
+      .select(["id", "source", "waited", "at_commit", "payload"])
+      .where("project_id", "=", projectId)
+      .where("kind", "=", PROJECT_DEPLOY_EVENT)
+      .execute();
+    expect(recorded).toEqual([
+      {
+        id: deploys[0]?.event,
+        source: "project",
+        waited: true,
+        at_commit: sha("4"),
+        payload: {
+          actor: { kind: "system", code: PROJECT_DEPLOY_EVENT },
+          causation: [],
+          detail: { commit: sha("4"), previousCommit: sha("3") },
+        },
+      },
+    ]);
+    // Its run carries the dispatcher's stamp.
+    expect(
+      await db
+        .selectFrom("workflow_runs")
+        .select("event_id")
+        .where("id", "=", deploys[0]?.runId ?? "")
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ event_id: deploys[0]?.event });
+    expect(await latest()).toMatchObject({
+      status: "deploying",
+      deployEventId: deploys[0]?.event,
+      deployRuns: [{ workflowName: "migrate", runId: deploys[0]?.runId }],
+      previousCommitSha: sha("3"),
+    });
+    // Waiting for the deploy: nothing moved, no second run starts, and the
+    // event is not recorded again.
     await revisions.advance();
     expect(deploys).toHaveLength(1);
     expect(await commitOf(watcher)).toBe(sha("3"));
@@ -636,11 +753,19 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     expect((await statuses()).slice(-1)).toEqual(["4:applied"]);
     expect(await commitOf(watcher)).toBe(sha("4"));
     expect(await commitOf(migrate)).toBe(sha("4"));
+    expect(
+      await db
+        .selectFrom("project_events")
+        .select("id")
+        .where("project_id", "=", projectId)
+        .where("kind", "=", PROJECT_DEPLOY_EVENT)
+        .execute(),
+    ).toHaveLength(1);
   });
 
   it("moves nothing when the deploy fails, and tries again at the next revision", async () => {
     await addCommit(sha("5"));
-    manifests.set(sha("5"), deployManifest);
+    migrates(sha("5"));
     await publish(sha("5"));
     await revisions.advance();
     await settleRun(deploys[1]!.runId, "failed");
@@ -656,15 +781,18 @@ describe("the project's deploy workflow (ADR 0331)", () => {
         title: `Revision ${sha("5").slice(0, 7)} did not go live`,
       }),
     ]);
-    const [failed] = await revisions.list({ identity: owner, projectId });
-    expect(failed?.error).toContain("relation already exists");
+    expect((await latest())?.error).toBe(
+      "The deploy workflow migrate failed: relation already exists. Nothing moved; the previous revision stays live.",
+    );
 
     await addCommit(sha("6"));
-    manifests.set(sha("6"), deployManifest);
+    migrates(sha("6"));
     await publish(sha("6"));
     await revisions.advance();
-    // The live revision is still the last one that went live.
+    // The live revision is still the last one that went live, and each
+    // revision's deploy is an event of its own.
     expect(deploys[2]).toMatchObject({ commit: sha("6"), previous: sha("4") });
+    expect(deploys[2]?.event).not.toBe(deploys[1]?.event);
     await settleRun(deploys[2]!.runId, "completed");
     await revisions.advance();
     expect(await commitOf(watcher)).toBe(sha("6"));
@@ -673,8 +801,8 @@ describe("the project's deploy workflow (ADR 0331)", () => {
   it("deploys revisions published in quick succession in order, one at a time", async () => {
     await addCommit(sha("7"));
     await addCommit(sha("8"));
-    manifests.set(sha("7"), deployManifest);
-    manifests.set(sha("8"), deployManifest);
+    migrates(sha("7"));
+    migrates(sha("8"));
     await publish(sha("7"));
     await revisions.advance();
     await publish(sha("8"));
@@ -696,21 +824,110 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     expect(maxLiveDeploys).toBe(1);
   });
 
-  it("fails the revision when the deploy workflow is not turned on", async () => {
+  it("takes no deploy step when nobody listens: no binding at the revision, or one whose workflow is not a project automation", async () => {
+    const started = deploys.length;
+    const events = async () =>
+      (
+        await db
+          .selectFrom("project_events")
+          .select("id")
+          .where("project_id", "=", projectId)
+          .where("kind", "=", PROJECT_DEPLOY_EVENT)
+          .execute()
+      ).length;
+    const before = await events();
+    // The revision no longer binds the event: `migrate` is not run for it.
     await addCommit(sha("9"));
-    manifests.set(
-      sha("9"),
-      JSON.stringify({ deploy: { workflow: "seedData" } }),
-    );
     await publish(sha("9"));
     await revisions.advance();
-    expect((await statuses()).slice(-1)).toEqual(["9:failed"]);
-    expect(await commitOf(watcher)).toBe(sha("8"));
-    const [failed] = await revisions.list({ identity: owner, projectId });
-    expect(failed?.error).toContain("not turned on as a project automation");
+    expect((await statuses()).slice(-1)).toEqual(["9:applied"]);
+    expect(await commitOf(watcher)).toBe(sha("9"));
+    expect(await latest()).toMatchObject({
+      deployEventId: null,
+      deployRuns: [],
+      error: null,
+    });
+    // A workflow binds it and nobody turned it on for the project, or only
+    // a member did for themselves: it does not listen.
+    await addCommit(sha("9a"));
+    deployBindings.set(sha("9a"), ["seedData", "notifyMe"]);
+    head = sha("9");
+    const mine = await enable("notifyMe", {
+      type: "member",
+      externalUserId: "owner",
+    });
+    await publish(sha("9a"));
+    await revisions.advance();
+    expect((await statuses()).slice(-1)).toEqual(["9:applied"]);
+    expect((await latest())?.commitSha).toBe(sha("9a"));
+    expect(await commitOf(watcher)).toBe(sha("9a"));
+    expect(deploys).toHaveLength(started);
+    expect(await events()).toBe(before);
+    await enablements.disable({ identity: owner, enablementId: mine.id });
   });
 
-  it("tries a failed revision again once by itself when its deploy workflow is consented to again", async () => {
+  it("fails a revision whose manifest still names a deploy workflow, saying what to bind instead", async () => {
+    const started = deploys.length;
+    await addCommit(sha("9b"));
+    manifests.set(
+      sha("9b"),
+      JSON.stringify({ deploy: { workflow: "migrate" } }),
+    );
+    migrates(sha("9b"));
+    await publish(sha("9b"));
+    await revisions.advance();
+    expect((await latest())?.status).toBe("failed");
+    expect((await latest())?.error).toBe(DEPLOY_WORKFLOW_REMOVED);
+    expect(deploys).toHaveLength(started);
+    expect(await commitOf(watcher)).toBe(sha("9a"));
+    // With the key gone the next revision's listener runs as bound.
+    await addCommit(sha("9c"));
+    migrates(sha("9c"));
+    await publish(sha("9c"));
+    await revisions.advance();
+    expect(deploys.at(-1)).toMatchObject({
+      commit: sha("9c"),
+      previous: sha("9a"),
+    });
+    await settleRun(deploys.at(-1)?.runId ?? "", "completed");
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("9c"));
+  });
+
+  it("does not go live when what the revision binds cannot be read, and waits when that may clear", async () => {
+    await addCommit(sha("9d"));
+    migrates(sha("9d"));
+    bindingsError = new Error("connection reset");
+    await publish(sha("9d"));
+    await revisions.advance();
+    // A failure that may clear: the revision waits, and nothing is told.
+    expect((await latest())?.status).toBe("pending");
+    expect(notifications).toEqual([]);
+    bindingsError = new WorkflowSourceInvalidError(
+      "Unknown trigger kind 'project.deployed'",
+    );
+    await db
+      .updateTable("published_revisions")
+      .set({ retry_at: null })
+      .where("project_id", "=", projectId)
+      .where("status", "=", "pending")
+      .execute();
+    await revisions.advance();
+    bindingsError = null;
+    expect((await latest())?.status).toBe("failed");
+    expect((await latest())?.error).toContain(
+      "What listens for this revision's deploy could not be read: Unknown trigger kind",
+    );
+    expect(await commitOf(watcher)).toBe(sha("9c"));
+    // Tried again on request, it deploys as bound.
+    await revisions.retry({ identity: owner, projectId });
+    await revisions.advance();
+    await settleRun(deploys.at(-1)?.runId ?? "", "completed");
+    await revisions.advance();
+    expect(await commitOf(watcher)).toBe(sha("9d"));
+  });
+
+  it("tries a failed revision again once by itself when a workflow that listened for its deploy is consented to again", async () => {
     const suspend = () =>
       db
         .updateTable("workflow_enablements")
@@ -722,20 +939,26 @@ describe("the project's deploy workflow (ADR 0331)", () => {
         .execute();
     await suspend();
     await addCommit(sha("ab"));
-    manifests.set(sha("ab"), deployManifest);
+    migrates(sha("ab"));
     await publish(sha("ab"));
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["a:failed"]);
-    const [blocked] = await revisions.list({ identity: owner, projectId });
-    expect(blocked?.error).toContain("could not start");
+    const blocked = await latest();
+    expect(blocked?.error).toContain(
+      "The deploy workflow migrate could not start",
+    );
+    // What listened is kept with the failure.
+    expect(blocked?.deployRuns).toEqual([
+      { workflowName: "migrate", runId: null },
+    ]);
 
-    // Turning the deploy automation back on tries the revision again.
+    // Turning the listening automation back on tries the revision again.
     const started = deploys.length;
     await enablements.reenable({ identity: owner, enablementId: migrate });
     expect((await statuses()).slice(-1)).toEqual(["a:pending"]);
     await revisions.advance();
     expect(deploys.slice(started)).toEqual([
-      expect.objectContaining({ commit: sha("ab"), previous: sha("8") }),
+      expect.objectContaining({ commit: sha("ab"), previous: sha("9d") }),
     ]);
     await settleRun(deploys.at(-1)?.runId ?? "", "failed");
     await revisions.advance();
@@ -746,7 +969,7 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await enablements.reenable({ identity: owner, enablementId: migrate });
     expect((await statuses()).slice(-1)).toEqual(["a:failed"]);
     expect(deploys).toHaveLength(started + 1);
-    expect(await commitOf(watcher)).toBe(sha("8"));
+    expect(await commitOf(watcher)).toBe(sha("9d"));
   });
 
   it("tries the latest failed revision again on request, for whoever manages project automations", async () => {
@@ -761,10 +984,19 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     ).rejects.toBeInstanceOf(AccessDeniedError);
 
     const retried = await revisions.retry({ identity: owner, projectId });
-    expect(retried).toMatchObject({ status: "pending", error: null });
+    expect(retried).toMatchObject({
+      status: "pending",
+      error: null,
+      deployEventId: null,
+      deployRuns: [],
+    });
     await revisions.advance();
     const run = deploys.at(-1);
-    expect(run).toMatchObject({ commit: sha("ab"), previous: sha("8") });
+    expect(run).toMatchObject({ commit: sha("ab"), previous: sha("9d") });
+    // Each try is an event of its own.
+    expect(new Set(deploys.slice(-3).map((deploy) => deploy.event)).size).toBe(
+      3,
+    );
     await settleRun(run?.runId ?? "", "completed");
     await revisions.advance();
     expect((await statuses()).slice(-1)).toEqual(["a:applied"]);
@@ -774,6 +1006,80 @@ describe("the project's deploy workflow (ADR 0331)", () => {
     await expect(
       revisions.retry({ identity: owner, projectId }),
     ).rejects.toBeInstanceOf(PublishedRevisionNotRetryableError);
+  });
+
+  it("runs every listener for the one event, and goes live only when all of them succeeded", async () => {
+    head = sha("ab");
+    const seed = (await enable("seedData")).id;
+    const both = (commitSha: string) =>
+      deployBindings.set(commitSha, ["migrate", "seedData"]);
+    const runOf = (started: number, workflow: string) =>
+      deploys.slice(started).find((deploy) => deploy.workflow === workflow);
+
+    let started = deploys.length;
+    await addCommit(sha("ac"));
+    both(sha("ac"));
+    await publish(sha("ac"));
+    await revisions.advance();
+    expect(
+      deploys
+        .slice(started)
+        .map((deploy) => deploy.workflow)
+        .sort(),
+    ).toEqual(["migrate", "seedData"]);
+    // One event, a run of its own for each listener.
+    expect(runOf(started, "migrate")?.event).toBe(
+      runOf(started, "seedData")?.event,
+    );
+    expect(
+      await db
+        .selectFrom("project_events")
+        .select("id")
+        .where("id", "=", runOf(started, "migrate")?.event ?? "")
+        .execute(),
+    ).toHaveLength(1);
+    expect((await latest())?.deployRuns).toEqual(
+      expect.arrayContaining([
+        { workflowName: "migrate", runId: runOf(started, "migrate")?.runId },
+        { workflowName: "seedData", runId: runOf(started, "seedData")?.runId },
+      ]),
+    );
+
+    // One failed and the other still runs: the deploy waits for it.
+    await settleRun(runOf(started, "seedData")?.runId ?? "", "failed");
+    await revisions.advance();
+    expect((await latest())?.status).toBe("deploying");
+    expect(notifications).toEqual([]);
+    await settleRun(runOf(started, "migrate")?.runId ?? "", "completed");
+    await revisions.advance();
+    expect(await latest()).toMatchObject({
+      status: "failed",
+      error:
+        "The deploy workflow seedData failed: relation already exists. Nothing moved; the previous revision stays live.",
+    });
+    expect(notifications).toEqual([
+      expect.objectContaining({ kind: "deploy_failed", to: "owner" }),
+    ]);
+    expect(await commitOf(watcher)).toBe(sha("ab"));
+    expect(await commitOf(seed)).toBe(sha("ab"));
+
+    // The next revision: both succeed, and everything moves.
+    started = deploys.length;
+    await addCommit(sha("ad"));
+    both(sha("ad"));
+    await publish(sha("ad"));
+    await revisions.advance();
+    expect(deploys.slice(started)).toHaveLength(2);
+    for (const deploy of deploys.slice(started)) {
+      expect(deploy).toMatchObject({ commit: sha("ad"), previous: sha("ab") });
+      await settleRun(deploy.runId, "completed");
+    }
+    await revisions.advance();
+    expect((await latest())?.status).toBe("applied");
+    expect(await commitOf(watcher)).toBe(sha("ad"));
+    expect(await commitOf(migrate)).toBe(sha("ad"));
+    expect(await commitOf(seed)).toBe(sha("ad"));
+    await enablements.disable({ identity: owner, enablementId: seed });
   });
 });
 
@@ -880,7 +1186,9 @@ describe("what following never does on its own (ADR 0330)", () => {
 
 describe("going live through passing trouble (ADRs 0330, 0331)", () => {
   let watcher: string;
-  const deployManifest = JSON.stringify({ deploy: { workflow: "migrate" } });
+  /** The workflow `migrate` binds `project.deploy` at this commit. */
+  const migrates = (commitSha: string) =>
+    deployBindings.set(commitSha, ["migrate"]);
   const openRevision = () =>
     db
       .selectFrom("published_revisions")
@@ -900,11 +1208,12 @@ describe("going live through passing trouble (ADRs 0330, 0331)", () => {
     watcher = (await enablements.list({ identity: owner, projectId })).find(
       (item) => item.workflowName === "watchInbox",
     )!.id;
+    const live = await commitOf(watcher);
     await addCommit(sha("fc"));
     previewError = new EnvironmentBindingUnavailableError("default");
     await publish(sha("fc"));
     await revisions.advance();
-    expect(await commitOf(watcher)).toBe(sha("ab"));
+    expect(await commitOf(watcher)).toBe(live);
     expect(notifications).toEqual([]);
     expect((await openRevision()).status).toBe("applying");
 
@@ -916,7 +1225,7 @@ describe("going live through passing trouble (ADRs 0330, 0331)", () => {
 
   it("tries a deploy that could not start for a passing reason again, instead of failing it", async () => {
     await addCommit(sha("fd"));
-    manifests.set(sha("fd"), deployManifest);
+    migrates(sha("fd"));
     const started = deploys.length;
     deployStartFailure = new Error("No machine has room for this run");
     await publish(sha("fd"));
@@ -938,18 +1247,24 @@ describe("going live through passing trouble (ADRs 0330, 0331)", () => {
 
   it("finds the deploy run it started when it lost the run's id, instead of starting another", async () => {
     await addCommit(sha("fe"));
-    manifests.set(sha("fe"), deployManifest);
+    migrates(sha("fe"));
     await publish(sha("fe"));
     await revisions.advance();
     const started = deploys.length;
     const runId = deploys.at(-1)?.runId;
     await settleRun(runId ?? "", "completed");
     // The process died after the run started and before it kept the id.
+    const deploying = await openRevision();
     await db
       .updateTable("published_revisions")
-      .set({ deploy_run_id: null })
-      .where("project_id", "=", projectId)
-      .where("status", "=", "deploying")
+      .set({
+        deploy_listeners: JSON.stringify(
+          (deploying.deploy_listeners as Array<Record<string, unknown>>).map(
+            (listener) => ({ ...listener, runId: null }),
+          ),
+        ),
+      })
+      .where("id", "=", deploying.id)
       .execute();
     await revisions.advance();
     await revisions.advance();
@@ -959,7 +1274,7 @@ describe("going live through passing trouble (ADRs 0330, 0331)", () => {
 
   it("tells the people who manage automations when a deploy runs long, and gives up after its timeout", async () => {
     await addCommit(sha("0a"));
-    manifests.set(sha("0a"), deployManifest);
+    migrates(sha("0a"));
     await publish(sha("0a"));
     await revisions.advance();
     const runId = deploys.at(-1)?.runId ?? "";
@@ -1098,5 +1413,71 @@ describe("moving keeps what a trigger received (ADR 0330)", () => {
         .where("event_id", "=", event.id)
         .executeTakeFirst(),
     ).toEqual({ status: "pending" });
+  });
+});
+
+describe("a deploy listener whose authority the revision changes (ADRs 0331, 0355)", () => {
+  const latest = async () =>
+    (await revisions.list({ identity: owner, projectId }))[0];
+
+  it("fails the deploy with the reason, runs nothing, and tries it again once that is consented to", async () => {
+    const live = (
+      await db
+        .selectFrom("published_revisions")
+        .select("commit_sha")
+        .where("project_id", "=", projectId)
+        .where("status", "=", "applied")
+        .orderBy("sequence", "desc")
+        .executeTakeFirstOrThrow()
+    ).commit_sha;
+    head = live;
+    const backfill = (await enable("backfill")).id;
+    const started = deploys.length;
+    // The revision asks for more than `backfill` was consented to.
+    await addCommit(sha("5c"), { permissions: ["documents:write"] });
+    deployBindings.set(sha("5c"), ["backfill"]);
+    await publish(sha("5c"));
+    notifications.length = 0;
+    await revisions.advance();
+    expect(await latest()).toMatchObject({
+      commitSha: sha("5c"),
+      status: "failed",
+      error:
+        "The deploy workflow backfill could not start: This revision changes what the workflow may use or what starts it (connections, permissions, Environment, triggers or secrets)",
+      deployRuns: [{ workflowName: "backfill", runId: null }],
+    });
+    // Nothing ran the new code under the old authority, and nothing moved.
+    expect(deploys).toHaveLength(started);
+    expect(notifications).toEqual([
+      expect.objectContaining({ kind: "deploy_failed", to: "owner" }),
+    ]);
+    expect(await commitOf(backfill)).toBe(live);
+
+    // Consenting to the listener at the revision tries the deploy again.
+    const preview = await enablements.preview({
+      identity: owner,
+      projectId,
+      workflowName: "backfill",
+      owner: { type: "project" },
+      commitSha: sha("5c"),
+    });
+    await enablements.updateDeployment({
+      identity: owner,
+      enablementId: backfill,
+      consentDigest: preview.consentDigest,
+      commitSha: sha("5c"),
+    });
+    expect((await latest())?.status).toBe("pending");
+    await revisions.advance();
+    expect(deploys.slice(started)).toEqual([
+      expect.objectContaining({
+        workflow: "backfill",
+        commit: sha("5c"),
+        previous: live,
+      }),
+    ]);
+    await settleRun(deploys.at(-1)?.runId ?? "", "completed");
+    await revisions.advance();
+    expect((await latest())?.status).toBe("applied");
   });
 });

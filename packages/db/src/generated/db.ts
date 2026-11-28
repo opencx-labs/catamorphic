@@ -820,6 +820,7 @@ export interface ProjectEventMonitors {
 }
 
 export interface ProjectEvents {
+  at_commit: string | null;
   external_id: string;
   id: Generated<string>;
   kind: string;
@@ -893,11 +894,10 @@ export interface PublishedRevisions {
   commit_sha: string;
   created_at: Generated<Timestamp>;
   deploy_attempt: Generated<number>;
-  deploy_enablement_id: string | null;
+  deploy_event_id: string | null;
+  deploy_listeners: Generated<Json>;
   deploy_noticed: Generated<boolean>;
-  deploy_run_id: string | null;
   deploy_started_at: Timestamp | null;
-  deploy_workflow: string | null;
   error: string | null;
   id: Generated<string>;
   previous_commit_sha: string | null;

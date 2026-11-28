@@ -175,16 +175,23 @@ export async function sessionEventSnapshot(input: {
   };
 }
 
-/** A session event the host built and has not recorded yet. */
-export interface PendingSessionEvent {
+/** A Project Event the host built and has not recorded yet. */
+export interface PendingProjectEvent {
   id: string;
   projectId: string;
-  /** The chat it is about, and whose it is: what decides who may hear it. */
-  session: { id: string; externalUserId: string; agentId: string | null };
+  /** `session` for a chat's events, `project` for the project's own. */
+  source: string;
   kind: string;
   externalId: string;
   occurredAt: string;
   payload: Json;
+}
+
+/** A session event the host built and has not recorded yet. */
+export interface PendingSessionEvent extends PendingProjectEvent {
+  source: "session";
+  /** The chat it is about, and whose it is: what decides who may hear it. */
+  session: { id: string; externalUserId: string; agentId: string | null };
 }
 
 /**
@@ -204,6 +211,7 @@ export async function pendingSessionEvent(input: {
   return {
     id: randomUUID(),
     projectId: chat.projectId,
+    source: "session",
     session: {
       id: input.sessionId,
       externalUserId: typeof owner === "string" ? owner : "",
@@ -230,11 +238,21 @@ export function sessionEventInput(event: {
   occurredAt: string;
   payload: Json;
 }): Json {
+  return projectEventInput({ ...event, source: "session" });
+}
+
+/**
+ * A Project Event as a bound workflow receives it, before the database
+ * gave it a sequence: the envelope every one is dispatched in.
+ */
+export function projectEventInput(
+  event: Omit<PendingProjectEvent, "source"> & { source: string },
+): Json {
   return {
     id: event.id,
     sequence: 0,
     projectId: event.projectId,
-    source: "session",
+    source: event.source,
     kind: event.kind,
     externalId: event.externalId,
     occurredAt: event.occurredAt,

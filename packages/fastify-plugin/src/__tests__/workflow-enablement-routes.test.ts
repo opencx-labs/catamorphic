@@ -203,8 +203,8 @@ describe("workflow enablement routes", () => {
         projectId: PROJECT_ID,
         commitSha: "b".repeat(40),
         status: "failed" as const,
-        deployWorkflow: "migrateDatabase",
-        deployRunId: null,
+        deployEventId: "d1b2c3d4-e5f6-4890-abcd-ef1234567890",
+        deployRuns: [{ workflowName: "migrateDatabase", runId: null }],
         previousCommitSha: "a".repeat(40),
         error: "The deploy workflow migrateDatabase failed",
         report: [],
@@ -224,7 +224,8 @@ describe("workflow enablement routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().items[0]).toMatchObject({
       status: "failed",
-      deployWorkflow: "migrateDatabase",
+      deployEventId: "d1b2c3d4-e5f6-4890-abcd-ef1234567890",
+      deployRuns: [{ workflowName: "migrateDatabase", runId: null }],
     });
     expect(list).toHaveBeenCalledWith({
       identity: TEST_IDENTITY,
@@ -240,8 +241,8 @@ describe("workflow enablement routes", () => {
       projectId: PROJECT_ID,
       commitSha: "c".repeat(40),
       status: "pending" as const,
-      deployWorkflow: "migrateDatabase",
-      deployRunId: null,
+      deployEventId: null,
+      deployRuns: [],
       previousCommitSha: "b".repeat(40),
       error: null,
       report: [],
